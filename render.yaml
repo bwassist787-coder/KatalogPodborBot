@@ -14,6 +14,8 @@ services:
         sync: false
       - key: WEBHOOK_SECRET
         generateValue: true
+      - key: HEALTHCHECK_TOKEN
+        sync: false
       - key: BOT_TOKEN
         sync: false
       - key: ALLOWED_USER_IDS
