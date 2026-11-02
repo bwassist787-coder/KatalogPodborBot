@@ -61,6 +61,23 @@ async def whoami(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.effective_message.reply_text(f"Ваш Telegram ID: {update.effective_user.id}")
 
 
+
+async def chatid(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Allow an authorized operator to identify the manager group safely."""
+    user = update.effective_user
+    chat = update.effective_chat
+    if user is None or chat is None or user.id not in ALLOWED_IDS:
+        return
+    if chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
+        await update.effective_message.reply_text(
+            "Добавьте бота в закрытую группу менеджеров и отправьте /chatid там."
+        )
+        return
+    await update.effective_message.reply_text(
+        f"Chat ID для MANAGER_CHAT_ID: {chat.id}"
+    )
+
+
 async def offers():
     return await asyncio.to_thread(read_offers)
 
@@ -364,6 +381,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("menu", start))
     app.add_handler(CommandHandler("whoami", whoami))
+    app.add_handler(CommandHandler("chatid", chatid))
     app.add_handler(CallbackQueryHandler(callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message))
     app.add_error_handler(on_error)
