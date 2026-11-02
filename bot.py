@@ -368,7 +368,21 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message))
     app.add_error_handler(on_error)
     log.info("Starting catalog in %s mode", "test" if TEST_MODE else "private")
-    app.run_polling(drop_pending_updates=True)
+    webhook_base = os.getenv("WEBHOOK_BASE_URL", "").strip().rstrip("/")
+    if webhook_base:
+        if not webhook_base.startswith("https://"):
+            raise SystemExit("WEBHOOK_BASE_URL must be HTTPS")
+        secret = os.getenv("WEBHOOK_SECRET", "").strip()
+        if not secret:
+            raise SystemExit("WEBHOOK_SECRET is required for webhook mode")
+        port = int(os.getenv("PORT", "10000"))
+        app.run_webhook(
+            listen="0.0.0.0", port=port, url_path="telegram",
+            webhook_url=f"{webhook_base}/telegram", secret_token=secret,
+            drop_pending_updates=True,
+        )
+    else:
+        app.run_polling(drop_pending_updates=True)
 
 
 if __name__ == "__main__":
