@@ -376,10 +376,12 @@ def main():
         if not secret:
             raise SystemExit("WEBHOOK_SECRET is required for webhook mode")
         port = int(os.getenv("PORT", "10000"))
+        from healthcheck import HealthHandler
         app.run_webhook(
             listen="0.0.0.0", port=port, url_path="telegram",
             webhook_url=f"{webhook_base}/telegram", secret_token=secret,
             drop_pending_updates=True,
+            extra_handlers=[(r"/healthz", HealthHandler)],
         )
     else:
         app.run_polling(drop_pending_updates=True)
