@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: bwg-catalog-test
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.11
+      - key: TEST_MODE
+        value: "true"
+      - key: WEBHOOK_BASE_URL
+        sync: false
+      - key: WEBHOOK_SECRET
+        generateValue: true
+      - key: HEALTHCHECK_TOKEN
+        sync: false
+      - key: BOT_TOKEN
+        sync: false
+      - key: ALLOWED_USER_IDS
+        sync: false
+      - key: SHEET_ID
+        sync: false
+      - key: CATALOG_GID
+        sync: false
