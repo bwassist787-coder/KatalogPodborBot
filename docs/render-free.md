@@ -16,3 +16,16 @@
 7. Free Render does not provide free continuously-running background workers or scheduled cron jobs. ZSK weekly checks need a separate scheduler (for example, GitHub Actions under an agreed security and authentication plan).
 
 **Security:** Repository visibility may be public, but secrets, Telegram session files, service-account JSON and company-private data must never be committed. A Google Sheets worksheet is not a permission boundary; do not publish the entire workbook to expose only the catalog tab.
+
+
+## Keepalive checks (weekdays, Moscow time)
+
+After deploying the Render test webhook app, set these secrets in **GitHub → Settings → Secrets and variables → Actions**:
+- `RENDER_BASE_URL` — the Render service origin, for example `https://your-name.onrender.com` (no path).
+- `HEALTHCHECK_TOKEN` — a long random string, identical to the **Render Environment** secret with the same name.
+
+Do not paste either value in repository files or chat. `/healthz` returns HTTP 200 only when the `X-Health-Token` header matches the secret, otherwise HTTP 403.
+
+GitHub Actions workflow `.github/workflows/render-keepalive.yml` runs Mon–Fri every 10 minutes from **09:00 to 19:00 Europe/Moscow** (including 19:00). Scheduled workflows are only run from the **default branch**, so this will remain inactive while the change is under review. After tests and approval, merge to `main` to enable. You can use workflow_dispatch for a manual check after configuring both secrets.
+
+Limitations: GitHub scheduled runs may be delayed or occasionally dropped; Render Free may still restart or sleep, and its ephemeral SQLite data is not durable. The check only confirms the web endpoint answered and does **not** perform ZSK verification.
