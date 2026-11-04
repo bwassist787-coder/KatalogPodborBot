@@ -38,9 +38,10 @@ def make_http_app(telegram_app, secret: str):
     return routes
 
 
-async def serve(telegram_app, port: int, webhook_url: str, secret: str):
+async def serve(telegram_app, port: int, webhook_url: str, secret: str, on_ready=None):
     await telegram_app.initialize()
     runner = None
+    reminder_task = None
     try:
         # Bind the HTTP listener before registering the webhook.
         runner = web.AppRunner(make_http_app(telegram_app, secret))
@@ -48,12 +49,20 @@ async def serve(telegram_app, port: int, webhook_url: str, secret: str):
         site = web.TCPSite(runner, "0.0.0.0", port)
         await site.start()
         await telegram_app.start()
+        if on_ready is not None:
+            reminder_task = asyncio.create_task(on_ready(telegram_app))
         await telegram_app.bot.set_webhook(
             url=webhook_url, secret_token=secret, drop_pending_updates=True,
         )
         log.info("Webhook listening on port %s", port)
         await asyncio.Event().wait()
     finally:
+        if reminder_task is not None:
+            reminder_task.cancel()
+            try:
+                await reminder_task
+            except asyncio.CancelledError:
+                pass
         if telegram_app.running:
             await telegram_app.stop()
         if runner is not None:
@@ -61,5 +70,5 @@ async def serve(telegram_app, port: int, webhook_url: str, secret: str):
         await telegram_app.shutdown()
 
 
-def run_server(telegram_app, port: int, webhook_url: str, secret: str):
-    asyncio.run(serve(telegram_app, port, webhook_url, secret))
+def run_server(telegram_app, port: int, webhook_url: str, secret: str, on_ready=None):
+    asyncio.run(serve(telegram_app, port, webhook_url, secret, on_ready=on_ready))

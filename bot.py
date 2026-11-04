@@ -4,6 +4,9 @@ import logging
 import os
 import re
 
+import manager_chat
+import case_store
+
 from telegram import InlineKeyboardButton as Button, InlineKeyboardMarkup as Markup, Update
 from telegram.constants import ChatType
 from telegram.ext import (
@@ -14,6 +17,7 @@ from catalog import CATEGORIES, NEARBY, filter_offers, read_offers, save_request
 
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
+logging.getLogger("httpx").setLevel(logging.WARNING)  # Never log Bot API token in URLs
 TEST_MODE = os.getenv("TEST_MODE", "true").lower() == "true"
 MANAGER_CHAT_ID = os.getenv("MANAGER_CHAT_ID", "").strip()
 ALLOWED_IDS = {int(s) for s in os.getenv("ALLOWED_USER_IDS", "").split(",") if s.strip().isdigit()}
@@ -27,7 +31,8 @@ def buttons(rows):
 def home():
     return buttons([[("По направлению", "menu:dir")],
                     [("По условиям", "menu:vat")],
-                    [("Не нашёл нужное", "menu:missing")]])
+                    [("Не нашёл нужное", "menu:missing")],
+                    [("Предложить компанию", "menu:propose")]])
 
 
 def permitted(update):
@@ -257,6 +262,34 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         state["selected_id"] = selected.id
         state["stage"] = "lead_inn"
         await msg.reply_text("Введите ИНН вашей компании (10 или 12 цифр):")
+    elif code == "menu:propose":
+        state.clear()
+        state["request_type"] = "Предложение компании"
+        state["stage"] = "prop_name"
+        await msg.reply_text("Введите название компании, которую предлагаете:")
+    elif code.startswith("prop:cat:"):
+        if state.get("stage") != "prop_category":
+            await msg.reply_text("Начните предложение заново.", reply_markup=home())
+            return
+        try:
+            state["prop_category"] = CATEGORIES[int(code.split(":")[-1])]
+        except (ValueError, IndexError):
+            await msg.reply_text("Неизвестное направление.")
+            return
+        state["stage"] = "prop_vat"
+        await msg.reply_text("Условия НДС:", reply_markup=buttons(
+            [[(v, "prop:vat:" + str(i))] for i, v in enumerate(VAT[1:])]))
+    elif code.startswith("prop:vat:"):
+        if state.get("stage") != "prop_vat":
+            await msg.reply_text("Начните предложение заново.", reply_markup=home())
+            return
+        try:
+            state["prop_vat"] = VAT[1:][int(code.split(":")[-1])]
+        except (ValueError, IndexError):
+            await msg.reply_text("Неизвестный вариант НДС.")
+            return
+        state["stage"] = "prop_amount"
+        await msg.reply_text("На какую сумму можете предложить компанию? Введите число в рублях:")
     elif code == "menu:missing":
         state.clear()
         state["request_type"] = "Не нашёл нужное"
@@ -301,24 +334,35 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         if MANAGER_CHAT_ID:
             try:
-                await context.bot.send_message(
-                    chat_id=MANAGER_CHAT_ID,
-                    text=(f"Новая заявка: {request_id}\nТип: {kind}\n"
-                          f"ID предложения: {chosen.id if chosen else 'нет'}\n"
-                          f"Telegram ID: {update.effective_user.id}\n"
-                          f"ИНН клиента: {state['lead_inn']}\nСумма: {rub(amount)}\n"
-                          f"Комментарий: {state['lead_comment'][:600]}")
-                )
+                summary = (
+                    f"ID предложения: {chosen.id if chosen else 'нет'}\n"
+                    f"Telegram ID: {update.effective_user.id}\n"
+                    f"ИНН клиента: {state['lead_inn']}\n"
+                    f"Сумма: {rub(amount)}\n"
+                    f"Комментарий: {state['lead_comment'][:600]}")
+                await asyncio.to_thread(
+                    case_store.register, request_id, update.effective_user.id,
+                    int(MANAGER_CHAT_ID), kind, summary)
+                record = case_store.find(request_id)
+                posted = await context.bot.send_message(
+                    chat_id=int(MANAGER_CHAT_ID),
+                    text=manager_chat.card(record),
+                    reply_markup=manager_chat.manager_keyboard(record))
+                case_store.set_group_message(request_id, posted.message_id)
             except Exception:
                 log.exception("Request %s saved but manager was not notified", request_id)
         state.clear()
-        await msg.reply_text(f"Заявка №{request_id} сохранена.", reply_markup=home())
+        await msg.reply_text(
+            f"Заявка №{request_id} сохранена и отправлена менеджерам.\n"
+            "Когда менеджер возьмёт её в работу, придёт уведомление.",
+            reply_markup=manager_chat.customer_keyboard(request_id))
     else:
         await msg.reply_text("Начните поиск заново.", reply_markup=home())
 
 
 async def message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type != ChatType.PRIVATE:
+        await manager_chat.manager_text(update, context)
         return
     if not permitted(update):
         await reject(update)
@@ -326,6 +370,56 @@ async def message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state = context.user_data
     txt = (update.effective_message.text or "").strip()
     stage = state.get("stage")
+    if stage == "client_question":
+        await manager_chat.client_question(update, context)
+        return
+    if stage == "prop_name":
+        if not 3 <= len(txt) <= 90:
+            await update.message.reply_text("Введите название от 3 до 90 символов.")
+            return
+        state["prop_name"] = txt
+        state["stage"] = "prop_inn"
+        await update.message.reply_text("Введите ИНН предлагаемой компании (10 или 12 цифр):")
+        return
+    if stage == "prop_inn":
+        if not re.fullmatch(r"(?:\d{10}|\d{12})", txt):
+            await update.message.reply_text("ИНН должен содержать 10 или 12 цифр.")
+            return
+        state["lead_inn"] = txt
+        state["stage"] = "prop_category"
+        await update.message.reply_text(
+            "Выберите направление компании:",
+            reply_markup=buttons([[(name, f"prop:cat:{i}")]
+                                  for i, name in enumerate(CATEGORIES)]))
+        return
+    if stage == "prop_amount":
+        cleaned = txt.replace(" ", "").replace("₽", "")
+        if not cleaned.isdecimal() or int(cleaned) <= 0:
+            await update.message.reply_text("Введите положительную сумму цифрами.")
+            return
+        state["lead_amount"] = int(cleaned)
+        state["stage"] = "prop_comment"
+        await update.message.reply_text("Напишите условия предложения (до 300 символов):")
+        return
+    if stage == "prop_comment":
+        if not 1 <= len(txt) <= 300:
+            await update.message.reply_text("Напишите условия до 300 символов.")
+            return
+        state["lead_comment"] = (
+            f"Компания: {state['prop_name']}; "
+            f"Направление: {state['prop_category']}; "
+            f"НДС: {state['prop_vat']}; "
+            f"Условия: {txt}")
+        state["stage"] = "confirm"
+        await update.message.reply_text(
+            "Проверьте предложение:\n"
+            f"{state['lead_comment']}\n"
+            f"ИНН: {state['lead_inn']}\n"
+            f"Сумма: {rub(state['lead_amount'])}\n"
+            "Отправить менеджерам? (в каталог автоматически не попадёт)",
+            reply_markup=buttons([[("Подтвердить", "lead:send")],
+                                  [("Отмена", "menu:start")]]))
+        return
     if stage in ("filter_amount", "lead_amount"):
         cleaned = txt.replace(" ", "").replace("₽", "")
         if not cleaned.isdecimal() or int(cleaned) <= 0:
@@ -382,6 +476,9 @@ def main():
     app.add_handler(CommandHandler("menu", start))
     app.add_handler(CommandHandler("whoami", whoami))
     app.add_handler(CommandHandler("chatid", chatid))
+    app.add_handler(CommandHandler("my", manager_chat.my_cases))
+    app.add_handler(CallbackQueryHandler(manager_chat.manager_callback, pattern=r"^mgr:"))
+    app.add_handler(CallbackQueryHandler(manager_chat.customer_callback, pattern=r"^cli:"))
     app.add_handler(CallbackQueryHandler(callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message))
     app.add_error_handler(on_error)
@@ -395,7 +492,8 @@ def main():
             raise SystemExit("WEBHOOK_SECRET is required for webhook mode")
         port = int(os.getenv("PORT", "10000"))
         from webhook_server import run_server
-        run_server(app, port=port, webhook_url=f"{webhook_base}/telegram", secret=secret)
+        run_server(app, port=port, webhook_url=f"{webhook_base}/telegram", secret=secret,
+                   on_ready=manager_chat.reminder_loop)
     else:
         app.run_polling(drop_pending_updates=True)
 
