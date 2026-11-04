@@ -382,7 +382,7 @@ async def message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Введите ИНН предлагаемой компании (10 или 12 цифр):")
         return
     if stage == "prop_inn":
-        if not re.fullmatch(r"(?:\\d{10}|\\d{12})", txt):
+        if not re.fullmatch(r"(?:\d{10}|\d{12})", txt):
             await update.message.reply_text("ИНН должен содержать 10 или 12 цифр.")
             return
         state["lead_inn"] = txt
@@ -412,10 +412,10 @@ async def message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Условия: {txt}")
         state["stage"] = "confirm"
         await update.message.reply_text(
-            "Проверьте предложение:\\n"
-            f"{state['lead_comment']}\\n"
-            f"ИНН: {state['lead_inn']}\\n"
-            f"Сумма: {rub(state['lead_amount'])}\\n"
+            "Проверьте предложение:\n"
+            f"{state['lead_comment']}\n"
+            f"ИНН: {state['lead_inn']}\n"
+            f"Сумма: {rub(state['lead_amount'])}\n"
             "Отправить менеджерам? (в каталог автоматически не попадёт)",
             reply_markup=buttons([[("Подтвердить", "lead:send")],
                                   [("Отмена", "menu:start")]]))
