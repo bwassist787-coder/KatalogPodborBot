@@ -27,13 +27,21 @@ def keyboard(rows):
 
 
 def customer_keyboard(rid, *, offer=False):
+    case = store.find(rid)
+    is_proposal = bool(case and case["kind"] == "Предложение компании")
     rows = []
     if offer:
-        rows.append([("Подходит", "cli:ok:" + rid),
-                     ("Другой вариант", "cli:other:" + rid)])
-    rows += [[("Задать вопрос", "cli:ask:" + rid)],
-             [("Новый подбор", "cli:new")],
-             [("Отменить заявку", "cli:cancel:" + rid)]]
+        if is_proposal:
+            rows.append([("Есть интерес", "cli:ok:" + rid)])
+        else:
+            rows.append([("Подходит", "cli:ok:" + rid),
+                         ("Другой вариант", "cli:other:" + rid)])
+    rows.append([("Задать вопрос", "cli:ask:" + rid)])
+    if is_proposal:
+        rows.append([("Предложить ещё компанию", "cli:propose")])
+    else:
+        rows.append([("Новый подбор", "cli:new")])
+    rows.append([("Отменить заявку", "cli:cancel:" + rid)])
     return keyboard(rows)
 
 
@@ -165,7 +173,8 @@ async def manager_callback(update, context):
         prompt = await q.message.reply_text(
             "Заявка " + rid + "\n" + manager_label(q.from_user) +
             ", ответьте на ЭТО сообщение текстом для клиента.\n"
-            "Сначала появится предпросмотр, отправка только по подтверждению.")
+            "Сначала появится предпросмотр, отправка только по подтверждению.\n"
+            "Перед отправкой проверьте ЗСК и не добавляйте внутренние данные.")
         store.prompt_add(prompt.message_id, rid, actor)
         return
     if action in ("askcancel", "askfinish"):
@@ -256,6 +265,13 @@ async def customer_callback(update, context):
         await q.answer("Только в личном чате", show_alert=True)
         return
     code = q.data or ""
+    if code == "cli:propose":
+        await q.answer()
+        context.user_data.clear()
+        context.user_data["request_type"] = "Предложение компании"
+        context.user_data["stage"] = "prop_name"
+        await q.message.reply_text("Введите название компании, которую предлагаете:")
+        return
     if code == "cli:new":
         await q.answer()
         context.user_data.clear()
