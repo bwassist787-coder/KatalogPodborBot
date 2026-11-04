@@ -1,0 +1,43 @@
+name: Keep Render awake (Moscow weekdays)
+
+on:
+  schedule:
+    - cron: '*/10 9-18 * * 1-5'
+      timezone: 'Europe/Moscow'
+    - cron: '0 19 * * 1-5'
+      timezone: 'Europe/Moscow'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: render-weekday-keepalive
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Authenticated Render /healthz request
+        shell: bash
+        env:
+          RENDER_BASE_URL: ${{ secrets.RENDER_BASE_URL }}
+          HEALTHCHECK_TOKEN: ${{ secrets.HEALTHCHECK_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$RENDER_BASE_URL" || -z "$HEALTHCHECK_TOKEN" ]]; then
+            echo "::warning::Keepalive inactive: add RENDER_BASE_URL and HEALTHCHECK_TOKEN to repository Actions secrets."
+            exit 0
+          fi
+          case "$RENDER_BASE_URL" in
+            https://*.onrender.com|https://*.onrender.com/) ;;
+            *) echo "::error::RENDER_BASE_URL must be the HTTPS origin of a Render service."; exit 1 ;;
+          esac
+          url="${RENDER_BASE_URL%/}/healthz"
+          curl --fail --silent --show-error --retry 2 --retry-delay 5 --max-time 120 \
+            -H "X-Health-Token: $HEALTHCHECK_TOKEN" \
+            -H "Cache-Control: no-cache" \
+            --output /dev/null "$url"
+          echo "Authenticated health check passed."
