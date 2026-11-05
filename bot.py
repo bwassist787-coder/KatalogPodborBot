@@ -83,6 +83,27 @@ async def chatid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+
+async def topicid(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show forum routing IDs to an allowlisted operator; read-only."""
+    user = update.effective_user
+    chat = update.effective_chat
+    message = update.effective_message
+    if not user or not chat or not message or user.id not in ALLOWED_IDS:
+        return
+    if chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
+        await message.reply_text("Отправьте /topicid в нужной теме тестовой группы.")
+        return
+    thread = message.message_thread_id
+    # The General topic often has thread ID 1; Telegram may omit it.
+    topic = str(thread) if thread is not None else "General / не указан Telegram"
+    await message.reply_text(
+        f"Группа: {chat.title or 'без названия'}\n"
+        f"Chat ID: {chat.id}\n"
+        f"Topic ID: {topic}"
+    )
+
+
 async def offers():
     return await asyncio.to_thread(read_offers)
 
@@ -476,6 +497,7 @@ def main():
     app.add_handler(CommandHandler("menu", start))
     app.add_handler(CommandHandler("whoami", whoami))
     app.add_handler(CommandHandler("chatid", chatid))
+    app.add_handler(CommandHandler("topicid", topicid))
     app.add_handler(CommandHandler("my", manager_chat.my_cases))
     app.add_handler(CallbackQueryHandler(manager_chat.manager_callback, pattern=r"^mgr:"))
     app.add_handler(CallbackQueryHandler(manager_chat.customer_callback, pattern=r"^cli:"))
