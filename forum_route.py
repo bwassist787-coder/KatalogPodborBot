@@ -153,19 +153,18 @@ def client_card(case: dict) -> str:
 
 
 def client_keyboard(case: dict):
+    """Legacy group cards remain readable; interactions move to verified DM."""
     rid = case["id"]
     rows = []
     if case["status"] == "Новая":
         rows.append([InlineKeyboardButton("Взять в работу", callback_data="mgr:take:" + rid)])
     if case["status"] not in ("Отменена", "Завершена"):
-        rows.append([InlineKeyboardButton("Задать вопрос", callback_data="gf:ask:" + rid)])
-    kind = "route_p" if case["kind"] == "Предложение компании" else "route_s"
-    rows.append([InlineKeyboardButton(
-        "Предложить ещё компанию" if kind == "route_p" else "Новый подбор",
-        url=link("route_p") if kind == "route_p" else "gf:start:search")])
-    if case["status"] not in ("Отменена", "Завершена"):
         rows.append([InlineKeyboardButton(
-            "Отменить заявку", callback_data="gf:cancel:" + rid)])
+            "Задать вопрос в личном чате", url=link("question_" + rid))])
+    payload = "route_p" if case["kind"] == "Предложение компании" else "route_s"
+    rows.append([InlineKeyboardButton(
+        "Предложить ещё компанию" if payload == "route_p" else "Новый подбор",
+        url=link(payload))])
     return InlineKeyboardMarkup(rows)
 
 
