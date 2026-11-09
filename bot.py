@@ -150,6 +150,32 @@ async def topicid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def setup_topics(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """One-time operator action: publish clickable menus to three test topics."""
+    user = update.effective_user
+    chat = update.effective_chat
+    message = update.effective_message
+    if (not user or not chat or not message or
+            user.id not in ALLOWED_IDS or
+            chat.id != forum_route.client_chat_id()):
+        return
+    if not forum_route.configured():
+        await message.reply_text("Маршрут тестовой группы не настроен. Нужна проверка.")
+        return
+    try:
+        result = await forum_route.install_menus(context.bot)
+    except Exception:
+        log.exception("Could not publish test forum menus")
+        await message.reply_text(
+            "Не удалось опубликовать все кнопки. Проверьте темы и права бота.")
+        return
+    await message.reply_text(
+        "Кнопки опубликованы в General, «Предложения от Нас» и "
+        "«Предложения от Клиента». Закрепите эти сообщения в темах. "
+        "Повторять настройку не нужно."
+    )
+
+
 async def offers():
     return await asyncio.to_thread(read_offers)
 
@@ -612,6 +638,7 @@ def main():
     app.add_handler(CommandHandler("whoami", whoami))
     app.add_handler(CommandHandler("chatid", chatid))
     app.add_handler(CommandHandler("topicid", topicid))
+    app.add_handler(CommandHandler("setup_topics", setup_topics))
     app.add_handler(CommandHandler("catalog", forum_route.entry))
     app.add_handler(CommandHandler("offer", forum_route.entry))
     app.add_handler(CommandHandler("my", manager_chat.my_cases))
