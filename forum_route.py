@@ -65,6 +65,64 @@ def group_topic_matches(chat_id: int, thread_id: int | None, kind: str) -> bool:
     return configured() and chat_id == client_chat_id() and thread_id == topic_id(kind)
 
 
+def button_menu(kind: str) -> tuple[str, InlineKeyboardMarkup]:
+    """User-facing, command-free entry menus; no internal company data."""
+    if kind == "search":
+        return (
+            "Наши предложения\n\n"
+            "Нажмите кнопку, чтобы подобрать компанию по направлению, НДС и сумме. "
+            "Оформление откроется в личном чате с ботом; подтверждённая заявка появится здесь.",
+            InlineKeyboardMarkup([[InlineKeyboardButton(
+                "Подобрать компанию", url=link("route_s"))]]),
+        )
+    if kind == "offer":
+        return (
+            "Предложения клиента\n\n"
+            "Нажмите кнопку, чтобы предложить компанию и указать условия. "
+            "Предложение отправится менеджерам на проверку, без автоматической публикации в каталоге.",
+            InlineKeyboardMarkup([[InlineKeyboardButton(
+                "Предложить компанию", url=link("route_p"))]]),
+        )
+    if kind == "general":
+        return (
+            "Каталог компаний\n\n"
+            "Выберите действие. Поиск и заполнение заявки откроются в личном диалоге с ботом. "
+            "Готовая заявка появится в соответствующей теме группы.",
+            InlineKeyboardMarkup([
+                [InlineKeyboardButton("Подобрать компанию", url=link("route_s"))],
+                [InlineKeyboardButton("Предложить компанию", url=link("route_p"))],
+            ]),
+        )
+    raise ValueError("Unsupported menu type")
+
+
+async def install_menus(bot) -> dict[str, int]:
+    """Post entry menus into the TWO exact topics and General exactly once per invocation.
+
+    Explicit operator action is required; never post at every Render restart.
+    """
+    if not configured():
+        raise ValueError("Test forum route is not configured")
+    target_chat = client_chat_id()
+    messages = {}
+    for key in ("search", "offer"):
+        text, keyboard = button_menu(key)
+        posted = await bot.send_message(
+            chat_id=target_chat,
+            message_thread_id=topic_id(key),
+            text=text,
+            reply_markup=keyboard,
+        )
+        messages[key] = posted.message_id
+    text, keyboard = button_menu("general")
+    # Telegram routes a supergroup message without message_thread_id to General.
+    posted = await bot.send_message(
+        chat_id=target_chat, text=text, reply_markup=keyboard,
+    )
+    messages["general"] = posted.message_id
+    return messages
+
+
 async def entry(update, context):
     """Display a private-bot launch button ONLY in the configured client group."""
     chat, message = update.effective_chat, update.effective_message
@@ -73,21 +131,14 @@ async def entry(update, context):
     command = (message.text or "").split()[0].split("@")[0].lower()
     kind = "offer" if command == "/offer" else "search"
     expected = topic_id(kind)
-    if message.message_thread_id != expected:
-        await message.reply_text(
-            "Для подбора откройте тему «Предложения от Нас», "
-            "для своей компании — «Предложения от Клиента».")
-        return
-    btn = ("Предложить компанию" if kind == "offer" else "Подобрать компанию")
+    # Do not depend on Telegram's incoming message_thread_id: for General
+    # it can be absent; in client groups the correct outbound topic is known.
+    menu_text, menu_keyboard = button_menu(kind)
     await context.bot.send_message(
         chat_id=chat.id,
         message_thread_id=expected,
-        text=("Оформление откроется в личном диалоге с ботом. "
-              "Готовая карточка появится здесь, а менеджеры получат заявку "
-              "во внутреннем чате."),
-        reply_markup=InlineKeyboardMarkup(
-            [[InlineKeyboardButton(btn, url=link("route_p" if kind == "offer" else "route_s"))]]
-        ),
+        text=menu_text,
+        reply_markup=menu_keyboard,
     )
 
 
