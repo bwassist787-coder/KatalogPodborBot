@@ -6,6 +6,7 @@ import re
 
 import manager_chat
 import case_store
+import forum_route
 
 from telegram import InlineKeyboardButton as Button, InlineKeyboardMarkup as Markup, Update
 from telegram.constants import ChatType
@@ -50,11 +51,56 @@ async def reject(update):
         )
 
 
+def reset_flow(state):
+    """Reset only the search flow; keep this user's validated forum origin."""
+    origin = state.get("client_route")
+    state.clear()
+    if origin:
+        state["client_route"] = origin
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type != ChatType.PRIVATE:
         return
     if not permitted(update):
         await reject(update)
+        return
+    args = context.args or []
+    payload = args[0] if args else ""
+    if payload in ("route_s", "route_p"):
+        if not await forum_route.member_allowed(context.bot, update.effective_user.id):
+            await update.message.reply_text(
+                "Не удалось подтвердить участие в тестовой клиентской группе. "
+                "Обратитесь к менеджеру.")
+            return
+        kind = "offer" if payload == "route_p" else "search"
+        context.user_data.clear()
+        context.user_data["client_route"] = forum_route.origin(kind)
+        if kind == "offer":
+            context.user_data["request_type"] = "Предложение компании"
+            context.user_data["stage"] = "prop_name"
+            await update.message.reply_text(
+                "Предложите компанию. Введите её название:")
+        else:
+            await update.message.reply_text(
+                "Подбор для тестового клиентского чата. Выберите поиск:",
+                reply_markup=home())
+        return
+    if payload.startswith("question_"):
+        rid = payload[len("question_"):]
+        case = case_store.find(rid)
+        if (not case or case["client_id"] != update.effective_user.id
+                or case["status"] not in ("Новая", "В работе")):
+            await update.message.reply_text("Заявка недоступна.")
+            return
+        if case.get("origin_chat_id") and not await forum_route.member_allowed(
+                context.bot, update.effective_user.id):
+            await update.message.reply_text("Нет доступа к заявке.")
+            return
+        context.user_data.clear()
+        context.user_data["stage"] = "client_question"
+        context.user_data["question_case"] = rid
+        await update.message.reply_text("Напишите вопрос по этой заявке:")
         return
     context.user_data.clear()
     prefix = "Тестовый каталог. Все предложения демонстрационные.\n\n" if TEST_MODE else ""
@@ -179,16 +225,16 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state, code = context.user_data, q.data or ""
     msg = q.message
     if code == "menu:start":
-        state.clear()
+        reset_flow(state)
         await msg.reply_text("Выберите способ поиска:", reply_markup=home())
     elif code == "menu:dir":
-        state.clear()
+        reset_flow(state)
         await msg.reply_text("Выберите направление:", reply_markup=buttons(
             [[(name, f"cat:{i}")] for i, name in enumerate(CATEGORIES)]
             + [[("Главное меню", "menu:start")]]
         ))
     elif code == "menu:vat":
-        state.clear()
+        reset_flow(state)
         await msg.reply_text("Выберите НДС:", reply_markup=buttons(
             [[(name, f"vat:{i}")] for i, name in enumerate(VAT)]
             + [[("Главное меню", "menu:start")]]
@@ -202,7 +248,7 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except ValueError:
             await msg.reply_text("Неизвестная категория. Начните заново.", reply_markup=home())
             return
-        state.clear()
+        reset_flow(state)
         state["category"] = category
         try:
             subcategories = sorted({o.subcategory for o in filter_offers(await offers(), category=category)
@@ -284,7 +330,7 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         state["stage"] = "lead_inn"
         await msg.reply_text("Введите ИНН вашей компании (10 или 12 цифр):")
     elif code == "menu:propose":
-        state.clear()
+        reset_flow(state)
         state["request_type"] = "Предложение компании"
         state["stage"] = "prop_name"
         await msg.reply_text("Введите название компании, которую предлагаете:")
@@ -312,7 +358,7 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         state["stage"] = "prop_amount"
         await msg.reply_text("На какую сумму можете предложить компанию? Введите число в рублях:")
     elif code == "menu:missing":
-        state.clear()
+        reset_flow(state)
         state["request_type"] = "Не нашёл нужное"
         state["stage"] = "lead_inn"
         await msg.reply_text("Введите ИНН вашей компании (10 или 12 цифр):")
@@ -331,14 +377,14 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await msg.reply_text("Проверка предложения недоступна. Повторите позже.")
                 return
             if chosen is None:
-                state.clear()
+                reset_flow(state)
                 await msg.reply_text("Предложение снято с каталога. Заявка не отправлена.",
                                      reply_markup=home())
                 return
         amount = state["lead_amount"]
         if chosen and ((chosen.min_sum is not None and amount < chosen.min_sum)
                        or (chosen.max_sum is not None and amount > chosen.max_sum)):
-            state.clear()
+            reset_flow(state)
             await msg.reply_text("Условия предложения изменились. Заявка не отправлена.",
                                  reply_markup=home())
             return
@@ -372,7 +418,7 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 case_store.set_group_message(request_id, posted.message_id)
             except Exception:
                 log.exception("Request %s saved but manager was not notified", request_id)
-        state.clear()
+        reset_flow(state)
         await msg.reply_text(
             f"Заявка №{request_id} сохранена и отправлена менеджерам.\n"
             "Когда менеджер возьмёт её в работу, придёт уведомление.",
@@ -498,6 +544,8 @@ def main():
     app.add_handler(CommandHandler("whoami", whoami))
     app.add_handler(CommandHandler("chatid", chatid))
     app.add_handler(CommandHandler("topicid", topicid))
+    app.add_handler(CommandHandler("catalog", forum_route.entry))
+    app.add_handler(CommandHandler("offer", forum_route.entry))
     app.add_handler(CommandHandler("my", manager_chat.my_cases))
     app.add_handler(CallbackQueryHandler(manager_chat.manager_callback, pattern=r"^mgr:"))
     app.add_handler(CallbackQueryHandler(manager_chat.customer_callback, pattern=r"^cli:"))
