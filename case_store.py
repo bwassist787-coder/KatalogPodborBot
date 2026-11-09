@@ -28,6 +28,19 @@ def _db():
         created_at INTEGER NOT NULL, reminder_origin INTEGER NOT NULL,
         reminder_stage INTEGER NOT NULL DEFAULT 0
     )""")
+    # Migrate existing test cases without discarding old local rows.
+    extra_columns = {
+        "origin_chat_id": "INTEGER",
+        "origin_topic_id": "INTEGER",
+        "origin_message_id": "INTEGER",
+        "origin_chat_title": "TEXT",
+        "origin_username": "TEXT",
+        "client_summary": "TEXT",
+    }
+    existing = {row["name"] for row in db.execute("PRAGMA table_info(manager_cases)")}
+    for name, datatype in extra_columns.items():
+        if name not in existing:
+            db.execute(f"ALTER TABLE manager_cases ADD COLUMN {name} {datatype}")
     db.execute("""CREATE TABLE IF NOT EXISTS case_events (
         seq INTEGER PRIMARY KEY AUTOINCREMENT, case_id TEXT NOT NULL,
         actor_id INTEGER, kind TEXT NOT NULL, detail TEXT, occurred_at INTEGER NOT NULL
@@ -49,13 +62,18 @@ def _event(db, rid, actor, kind, detail=""):
                (rid, actor, kind, detail, int(time.time())))
 
 
-def register(rid, client_id, chat_id, kind, summary):
+def register(rid, client_id, chat_id, kind, summary, *,
+             origin_chat_id=None, origin_topic_id=None, origin_chat_title="",
+             origin_username="", client_summary=""):
     now = int(time.time())
     with _db() as db:
         db.execute("""INSERT INTO manager_cases
-            (id,client_id,chat_id,kind,summary,created_at,reminder_origin)
-            VALUES(?,?,?,?,?,?,?)""",
-            (rid, client_id, chat_id, kind, summary, now, now))
+            (id,client_id,chat_id,kind,summary,created_at,reminder_origin,
+             origin_chat_id,origin_topic_id,origin_chat_title,origin_username,client_summary)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (rid, client_id, chat_id, kind, summary, now, now,
+             origin_chat_id, origin_topic_id, origin_chat_title,
+             origin_username, client_summary))
         _event(db, rid, client_id, "created")
 
 
@@ -68,6 +86,12 @@ def find(rid):
 def set_group_message(rid, message_id):
     with _db() as db:
         db.execute("UPDATE manager_cases SET chat_message_id=? WHERE id=?",
+                   (message_id, rid))
+
+
+def set_origin_message(rid, message_id):
+    with _db() as db:
+        db.execute("UPDATE manager_cases SET origin_message_id=? WHERE id=?",
                    (message_id, rid))
 
 
