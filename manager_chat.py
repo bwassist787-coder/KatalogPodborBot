@@ -72,6 +72,17 @@ def card(case):
         return (display + (case.get("client_summary") or case["summary"]) +
                 f"\n\nСтатус: {case['status']}\nОтветственный: {owner}"
                 f"\n\nID: {case['id']}")
+    if case.get("client_group_id"):
+        nickname = case.get("origin_username") or "Без ника"
+        header = ("Чат: " + (case.get("client_group_title") or "Клиентская группа")
+                  + "\n" + nickname + "\n"
+                  + ("Предложение клиента" if case["kind"] == "Предложение компании"
+                     else ("Свободный запрос" if case["kind"] == "Свободный запрос"
+                           else "Подбор компании")) + "\n")
+        return (header + (case.get("client_summary") or case["summary"])
+                + "\n\nСтатус: " + case["status"]
+                + "\nОтветственный: " + owner
+                + "\n\nID: " + case["id"])
     return (f"Заявка {case['id']}\n"
             f"Тип: {case['kind']}\n"
             f"{case['summary']}\n\n"
