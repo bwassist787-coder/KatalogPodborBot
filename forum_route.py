@@ -79,10 +79,12 @@ async def entry(update, context):
             "для своей компании — «Предложения от Клиента».")
         return
     btn = ("Предложить компанию" if kind == "offer" else "Подобрать компанию")
-    await message.reply_text(
-        "Оформление откроется в личном диалоге с ботом. "
-        "Готовая карточка появится здесь, а менеджеры получат заявку "
-        "во внутреннем чате.",
+    await context.bot.send_message(
+        chat_id=chat.id,
+        message_thread_id=expected,
+        text=("Оформление откроется в личном диалоге с ботом. "
+              "Готовая карточка появится здесь, а менеджеры получат заявку "
+              "во внутреннем чате."),
         reply_markup=InlineKeyboardMarkup(
             [[InlineKeyboardButton(btn, url=link("route_p" if kind == "offer" else "route_s"))]]
         ),
