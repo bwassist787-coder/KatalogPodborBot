@@ -19,18 +19,17 @@ class TopicButtonsTests(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         self.env.stop()
 
-    def test_menu_buttons_are_deep_links_not_commands(self):
-        for kind, payload in [
-            ("search", "route_s"),
-            ("offer", "route_p"),
-        ]:
+    def test_menu_buttons_are_group_callbacks_not_private_links(self):
+        for kind in ("search", "offer"):
             message, markup = forum_route.button_menu(kind)
             self.assertTrue(message)
-            self.assertIn("?start=" + payload,
-                          markup.inline_keyboard[0][0].url)
-            self.assertNotIn("callback_data", str(markup.to_dict()))
+            self.assertEqual(markup.inline_keyboard[0][0].callback_data,
+                             "gf:start:" + kind)
+            self.assertIsNone(markup.inline_keyboard[0][0].url)
         _, menu = forum_route.button_menu("general")
         self.assertEqual(len(menu.inline_keyboard), 2)
+        self.assertEqual(menu.inline_keyboard[0][0].callback_data,
+                         "gf:start:search")
 
     async def test_install_routes_to_exact_two_topics_and_general(self):
         bot = SimpleNamespace(send_message=AsyncMock(side_effect=[
