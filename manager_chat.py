@@ -313,6 +313,11 @@ async def customer_callback(update, context):
     if update.effective_chat.type != ChatType.PRIVATE:
         await q.answer("Только в личном чате", show_alert=True)
         return
+    from private_client import resolve_group, case_belongs_to_client
+    active_group = await resolve_group(context.bot, q.from_user)
+    if not active_group:
+        await q.answer("Клиентская группа не подтверждена.", show_alert=True)
+        return
     code = q.data or ""
     if code == "cli:propose":
         await q.answer()
@@ -334,8 +339,9 @@ async def customer_callback(update, context):
         return
     _, action, rid = parts
     case = store.find(rid)
-    if not case or case["client_id"] != q.from_user.id:
-        await q.answer("Заявка недоступна. Откройте /start.", show_alert=True)
+    if not case_belongs_to_client(case, q.from_user.id, active_group["chat_id"]):
+        await q.answer("Заявка другого клиента или группы недоступна.",
+                       show_alert=True)
         return
     if case["status"] not in ("Новая", "В работе"):
         await q.answer("Заявка уже закрыта", show_alert=True)
@@ -370,9 +376,13 @@ async def customer_callback(update, context):
 
 
 async def client_question(update, context):
+    from private_client import resolve_group, case_belongs_to_client
+    verified = await resolve_group(context.bot, update.effective_user)
     rid = context.user_data.get("question_case")
     case = store.find(rid) if rid else None
-    if not case or case["client_id"] != update.effective_user.id or case["status"] not in ("Новая", "В работе"):
+    if (not verified or not case_belongs_to_client(
+            case, update.effective_user.id, verified["chat_id"]) or
+            case["status"] not in ("Новая", "В работе")):
         context.user_data.clear()
         await update.message.reply_text("Эта заявка недоступна. Начните заново: /start")
         return
