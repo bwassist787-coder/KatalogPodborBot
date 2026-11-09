@@ -7,6 +7,7 @@ import re
 import manager_chat
 import case_store
 import forum_route
+import group_dialog
 
 from telegram import InlineKeyboardButton as Button, InlineKeyboardMarkup as Markup, Update
 from telegram.constants import ChatType
@@ -523,6 +524,8 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type != ChatType.PRIVATE:
+        if await group_dialog.text_input(update, context):
+            return
         await manager_chat.manager_text(update, context)
         return
     if not permitted(update):
@@ -642,6 +645,7 @@ def main():
     app.add_handler(CommandHandler("catalog", forum_route.entry))
     app.add_handler(CommandHandler("offer", forum_route.entry))
     app.add_handler(CommandHandler("my", manager_chat.my_cases))
+    app.add_handler(CallbackQueryHandler(group_dialog.callback, pattern=r"^gf:"))
     app.add_handler(CallbackQueryHandler(manager_chat.manager_callback, pattern=r"^mgr:"))
     app.add_handler(CallbackQueryHandler(manager_chat.customer_callback, pattern=r"^cli:"))
     app.add_handler(CallbackQueryHandler(callback))
