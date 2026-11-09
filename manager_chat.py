@@ -8,6 +8,7 @@ import os
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ChatType
 import case_store as store
+import forum_route
 
 log = logging.getLogger(__name__)
 
@@ -60,7 +61,17 @@ def manager_keyboard(case):
 
 
 def card(case):
-    owner = case["owner_name"] or "не назначен"
+    owner = case["owner_name"] or "Не назначен"
+    if case.get("origin_chat_id"):
+        group_link = forum_route.private_group_url(case)
+        display = (f"Чат: {case.get('origin_chat_title') or 'Тестовый чат'}\n"
+                   + (f"Перейти в чат: {group_link}\n" if group_link else "")
+                   + (f"{case['origin_username']}\n" if case.get('origin_username') else "")
+                   + ("Предложение клиента\n" if case['kind'] == 'Предложение компании'
+                      else "Наше предложение / подбор\n"))
+        return (display + (case.get("client_summary") or case["summary"]) +
+                f"\n\nСтатус: {case['status']}\nОтветственный: {owner}"
+                f"\n\nID: {case['id']}")
     return (f"Заявка {case['id']}\n"
             f"Тип: {case['kind']}\n"
             f"{case['summary']}\n\n"
@@ -70,14 +81,17 @@ def card(case):
 
 async def update_card(bot, rid):
     case = store.find(rid)
-    if not case or not case.get("chat_message_id"):
+    if not case:
         return
-    try:
-        await bot.edit_message_text(
-            chat_id=case["chat_id"], message_id=case["chat_message_id"],
-            text=card(case), reply_markup=manager_keyboard(case))
-    except Exception:
-        log.exception("Could not refresh manager card for %s", rid)
+    if case.get("chat_message_id"):
+        try:
+            await bot.edit_message_text(
+                chat_id=case["chat_id"], message_id=case["chat_message_id"],
+                text=card(case), reply_markup=manager_keyboard(case))
+        except Exception:
+            log.exception("Could not refresh manager card for %s", rid)
+    if case.get("origin_message_id"):
+        await forum_route.update_group_card(bot, case)
 
 
 async def notify_group(bot, rid, text):
@@ -95,9 +109,19 @@ async def notify_client(bot, rid, text, offer=False):
     case = store.find(rid)
     if not case:
         return
-    await bot.send_message(
-        chat_id=case["client_id"], text=text,
-        reply_markup=customer_keyboard(rid, offer=offer))
+    if case.get("origin_chat_id"):
+        if not forum_route.configured() or case["origin_chat_id"] != forum_route.client_chat_id():
+            raise ValueError("Unknown client chat route: blocked")
+        if case.get("origin_topic_id") != forum_route.topic_id(
+                "offer" if case["kind"] == "Предложение компании" else "search"):
+            raise ValueError("Client topic mismatch: blocked")
+        await bot.send_message(
+            chat_id=case["origin_chat_id"],
+            message_thread_id=case["origin_topic_id"], text=text)
+    else:
+        await bot.send_message(
+            chat_id=case["client_id"], text=text,
+            reply_markup=customer_keyboard(rid, offer=offer))
 
 
 def manager_label(user):
@@ -108,8 +132,8 @@ async def manager_callback(update, context):
     q = update.callback_query
     if not q or not q.data:
         return
-    if not update.effective_chat or update.effective_chat.id != group_id():
-        await q.answer("Эта кнопка доступна только в рабочей группе.", show_alert=True)
+    if not update.effective_chat:
+        await q.answer("Неизвестный чат", show_alert=True)
         return
     parts = q.data.split(":", 2)
     if len(parts) != 3:
@@ -118,6 +142,20 @@ async def manager_callback(update, context):
     _, action, rid = parts
     actor = q.from_user.id
     case = store.find(rid) if action not in ("confirm", "discard") else None
+    in_manager_group = update.effective_chat.id == group_id()
+    # In a client forum only explicit, allowlisted managers may claim a case.
+    allowed_manager_ids = {
+        int(s) for s in os.getenv("ALLOWED_USER_IDS", "").split(",")
+        if s.strip().isdigit()
+    }
+    in_origin_group = bool(
+        case and action == "take" and case.get("origin_chat_id") ==
+        update.effective_chat.id and forum_route.configured() and
+        actor in allowed_manager_ids
+    )
+    if not in_manager_group and not in_origin_group:
+        await q.answer("Это действие доступно только менеджерам.", show_alert=True)
+        return
     if action in ("confirm", "discard"):
         if action == "discard":
             # Pending draft remains inaccessible for sending; no message is sent.
