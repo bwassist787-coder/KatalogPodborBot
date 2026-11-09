@@ -71,26 +71,26 @@ def button_menu(kind: str) -> tuple[str, InlineKeyboardMarkup]:
         return (
             "Наши предложения\n\n"
             "Нажмите кнопку, чтобы подобрать компанию по направлению, НДС и сумме. "
-            "Заполнение заявки пройдёт прямо в этой теме, без перехода в личный чат.",
+            "Оформление заявки откроется в личном чате с ботом.",
             InlineKeyboardMarkup([[InlineKeyboardButton(
-                "Подобрать компанию", callback_data="gf:start:search")]]),
+                "Подобрать компанию", url=link("route_s"))]]),
         )
     if kind == "offer":
         return (
             "Предложения клиента\n\n"
-            "Нажмите кнопку, чтобы прямо в этой теме предложить компанию и указать условия. "
+            "Нажмите кнопку, чтобы предложить компанию в личном чате с ботом. "
             "Предложение отправится менеджерам на проверку, без автоматической публикации в каталоге.",
             InlineKeyboardMarkup([[InlineKeyboardButton(
-                "Предложить компанию", callback_data="gf:start:offer")]]),
+                "Предложить компанию", url=link("route_p"))]]),
         )
     if kind == "general":
         return (
             "Каталог компаний\n\n"
-            "Выберите действие. Бот откроет форму в нужной теме этой группы. "
+            "Выберите действие. Заявка оформляется в личных сообщениях боту. "
             "Готовая заявка появится в соответствующей теме группы.",
             InlineKeyboardMarkup([
-                [InlineKeyboardButton("Подобрать компанию", callback_data="gf:start:search")],
-                [InlineKeyboardButton("Предложить компанию", callback_data="gf:start:offer")],
+                [InlineKeyboardButton("Подобрать компанию", url=link("route_s"))],
+                [InlineKeyboardButton("Предложить компанию", url=link("route_p"))],
             ]),
         )
     raise ValueError("Unsupported menu type")
@@ -153,19 +153,18 @@ def client_card(case: dict) -> str:
 
 
 def client_keyboard(case: dict):
+    """Legacy group cards remain readable; interactions move to verified DM."""
     rid = case["id"]
     rows = []
     if case["status"] == "Новая":
         rows.append([InlineKeyboardButton("Взять в работу", callback_data="mgr:take:" + rid)])
     if case["status"] not in ("Отменена", "Завершена"):
-        rows.append([InlineKeyboardButton("Задать вопрос", callback_data="gf:ask:" + rid)])
-    kind = "route_p" if case["kind"] == "Предложение компании" else "route_s"
-    rows.append([InlineKeyboardButton(
-        "Предложить ещё компанию" if kind == "route_p" else "Новый подбор",
-        callback_data="gf:start:offer" if kind == "route_p" else "gf:start:search")])
-    if case["status"] not in ("Отменена", "Завершена"):
         rows.append([InlineKeyboardButton(
-            "Отменить заявку", callback_data="gf:cancel:" + rid)])
+            "Задать вопрос в личном чате", url=link("question_" + rid))])
+    payload = "route_p" if case["kind"] == "Предложение компании" else "route_s"
+    rows.append([InlineKeyboardButton(
+        "Предложить ещё компанию" if payload == "route_p" else "Новый подбор",
+        url=link(payload))])
     return InlineKeyboardMarkup(rows)
 
 

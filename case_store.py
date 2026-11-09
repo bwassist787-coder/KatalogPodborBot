@@ -36,6 +36,8 @@ def _db():
         "origin_chat_title": "TEXT",
         "origin_username": "TEXT",
         "client_summary": "TEXT",
+        "client_group_id": "INTEGER",
+        "client_group_title": "TEXT",
     }
     existing = {row["name"] for row in db.execute("PRAGMA table_info(manager_cases)")}
     for name, datatype in extra_columns.items():
@@ -64,16 +66,18 @@ def _event(db, rid, actor, kind, detail=""):
 
 def register(rid, client_id, chat_id, kind, summary, *,
              origin_chat_id=None, origin_topic_id=None, origin_chat_title="",
-             origin_username="", client_summary=""):
+             origin_username="", client_summary="", client_group_id=None,
+             client_group_title=""):
     now = int(time.time())
     with _db() as db:
         db.execute("""INSERT INTO manager_cases
             (id,client_id,chat_id,kind,summary,created_at,reminder_origin,
-             origin_chat_id,origin_topic_id,origin_chat_title,origin_username,client_summary)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+             origin_chat_id,origin_topic_id,origin_chat_title,origin_username,client_summary,
+             client_group_id,client_group_title)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (rid, client_id, chat_id, kind, summary, now, now,
              origin_chat_id, origin_topic_id, origin_chat_title,
-             origin_username, client_summary))
+             origin_username, client_summary, client_group_id, client_group_title))
         _event(db, rid, client_id, "created")
 
 
@@ -81,6 +85,17 @@ def find(rid):
     with _db() as db:
         row = db.execute("SELECT * FROM manager_cases WHERE id=?", (rid,)).fetchone()
         return dict(row) if row else None
+
+
+def client_cases(client_id, group_id, limit=12):
+    """Return only user's cases from an exact verified group; no name matching."""
+    with _db() as db:
+        rows = db.execute("""SELECT * FROM manager_cases
+            WHERE client_id=? AND
+            (client_group_id=? OR (client_group_id IS NULL AND origin_chat_id=?))
+            ORDER BY created_at DESC, id DESC LIMIT ?""",
+            (client_id, group_id, group_id, limit)).fetchall()
+        return [dict(row) for row in rows]
 
 
 def set_group_message(rid, message_id):

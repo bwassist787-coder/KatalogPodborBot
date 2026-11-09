@@ -7,7 +7,7 @@ import re
 import manager_chat
 import case_store
 import forum_route
-import group_dialog
+import private_client
 
 from telegram import InlineKeyboardButton as Button, InlineKeyboardMarkup as Markup, Update
 from telegram.constants import ChatType
@@ -31,10 +31,22 @@ def buttons(rows):
 
 
 def home():
+    return buttons([[("Новая заявка", "menu:new")],
+                    [("Мои заявки", "dash:list:active")],
+                    [("Предложить компанию", "menu:propose")]])
+
+
+def new_request_menu():
+    return buttons([[("Описать своими словами", "menu:free")],
+                    [("Подобрать по фильтрам", "menu:filters")],
+                    [("Главное меню", "menu:start")]])
+
+
+def filter_menu():
     return buttons([[("По направлению", "menu:dir")],
                     [("По условиям", "menu:vat")],
                     [("Не нашёл нужное", "menu:missing")],
-                    [("Предложить компанию", "menu:propose")]])
+                    [("Главное меню", "menu:start")]])
 
 
 def permitted(update):
@@ -53,59 +65,47 @@ async def reject(update):
 
 
 def reset_flow(state):
-    """Reset only the search flow; keep this user's validated forum origin."""
-    origin = state.get("client_route")
+    """Clear the previous intake flow; no implied group routing."""
     state.clear()
-    if origin:
-        state["client_route"] = origin
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type != ChatType.PRIVATE:
         return
-    if not permitted(update):
-        await reject(update)
+    group = await private_client.resolve_group(context.bot, update.effective_user)
+    if not group:
+        await update.effective_message.reply_text(
+            "Создание заявок доступно только участникам подключённого клиентского чата. "
+            "Если вы уже состоите в группе, обратитесь к менеджеру для проверки привязки.")
         return
-    args = context.args or []
-    payload = args[0] if args else ""
-    if payload in ("route_s", "route_p"):
-        if not await forum_route.member_allowed(context.bot, update.effective_user.id):
-            await update.message.reply_text(
-                "Не удалось подтвердить участие в тестовой клиентской группе. "
-                "Обратитесь к менеджеру.")
-            return
-        kind = "offer" if payload == "route_p" else "search"
-        context.user_data.clear()
-        context.user_data["client_route"] = forum_route.origin(kind)
-        if kind == "offer":
-            context.user_data["request_type"] = "Предложение компании"
-            context.user_data["stage"] = "prop_name"
-            await update.message.reply_text(
-                "Предложите компанию. Введите её название:")
-        else:
-            await update.message.reply_text(
-                "Подбор для тестового клиентского чата. Выберите поиск:",
-                reply_markup=home())
-        return
+    payload = (context.args or [""])[0] if context.args else ""
+    reset_flow(context.user_data)
     if payload.startswith("question_"):
         rid = payload[len("question_"):]
         case = case_store.find(rid)
-        if (not case or case["client_id"] != update.effective_user.id
-                or case["status"] not in ("Новая", "В работе")):
+        if not private_client.case_belongs_to_client(
+                case, update.effective_user.id, group["chat_id"]):
             await update.message.reply_text("Заявка недоступна.")
             return
-        if case.get("origin_chat_id") and not await forum_route.member_allowed(
-                context.bot, update.effective_user.id):
-            await update.message.reply_text("Нет доступа к заявке.")
+        if case["status"] not in ("Новая", "В работе"):
+            await update.message.reply_text("Заявка уже закрыта.")
             return
-        context.user_data.clear()
         context.user_data["stage"] = "client_question"
         context.user_data["question_case"] = rid
-        await update.message.reply_text("Напишите вопрос по этой заявке:")
+        await update.message.reply_text("Напишите вопрос по заявке:")
         return
-    context.user_data.clear()
-    prefix = "Тестовый каталог. Все предложения демонстрационные.\n\n" if TEST_MODE else ""
-    await update.effective_message.reply_text(prefix + "Выберите способ поиска:", reply_markup=home())
+    if payload == "route_p":
+        context.user_data["request_type"] = "Предложение компании"
+        context.user_data["stage"] = "prop_name"
+        await update.message.reply_text("Введите название компании, которую предлагаете:")
+        return
+    if payload == "route_s":
+        await update.message.reply_text("Создадим заявку. Выберите способ:", reply_markup=new_request_menu())
+        return
+    prefix = "Тестовый каталог. Компании и условия демонстрационные.\\n\\n" if TEST_MODE else ""
+    await update.effective_message.reply_text(
+        prefix + "Клиентская группа: " + group["title"] +
+        "\\nВыберите действие:", reply_markup=home())
 
 
 async def whoami(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -177,6 +177,25 @@ async def setup_topics(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def legacy_group_button(update, context):
+    """Old topic buttons no longer create cases; send users to private intake."""
+    q = update.callback_query
+    if not q:
+        return
+    if not update.effective_chat or update.effective_chat.id != forum_route.client_chat_id():
+        await q.answer("Недоступная группа", show_alert=True)
+        return
+    await q.answer("Заявки теперь создаются в личном чате с ботом.")
+    try:
+        await q.message.reply_text(
+            "Откройте личный чат с ботом и создайте заявку кнопкой.",
+            reply_markup=Markup([[Button(
+                "Открыть бота", url=forum_route.link("route_s"))]]),
+        )
+    except Exception:
+        log.exception("Cannot send redirect for old group button")
+
+
 async def offers():
     return await asyncio.to_thread(read_offers)
 
@@ -245,15 +264,41 @@ async def show_results(message, context, page=0):
 
 async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    if update.effective_chat.type != ChatType.PRIVATE or not permitted(update):
-        await reject(update)
+    if update.effective_chat.type != ChatType.PRIVATE:
+        await q.answer("Заявки оформляются только в личном чате.", show_alert=True)
+        return
+    group = await private_client.resolve_group(context.bot, update.effective_user)
+    if not group:
+        await q.answer("Клиентская группа не подтверждена. Обратитесь к менеджеру.",
+                       show_alert=True)
         return
     await q.answer()
     state, code = context.user_data, q.data or ""
     msg = q.message
     if code == "menu:start":
         reset_flow(state)
-        await msg.reply_text("Выберите способ поиска:", reply_markup=home())
+        await msg.reply_text("Выберите действие:", reply_markup=home())
+    elif code == "menu:new":
+        reset_flow(state)
+        await msg.reply_text("Как оформить новую заявку?", reply_markup=new_request_menu())
+    elif code == "menu:filters":
+        reset_flow(state)
+        await msg.reply_text("Подбор по параметрам:", reply_markup=filter_menu())
+    elif code == "menu:free":
+        reset_flow(state)
+        state["request_type"] = "Свободный запрос"
+        state["stage"] = "free_text"
+        await msg.reply_text(
+            "Опишите задачу своими словами (до 1200 символов): какая компания "
+            "нужна, сумма, услуги и любые важные условия. "
+            "Необязательные сведения уточнит менеджер.")
+    elif code in ("dash:list:active", "dash:list:closed"):
+        reset_flow(state)
+        section = "closed" if code.endswith("closed") else "active"
+        await private_client.show_my_cases(msg, context, group, state=section)
+    elif code.startswith("dash:view:"):
+        await private_client.show_case(
+            msg, context, code[len("dash:view:"):], update.effective_user, group)
     elif code == "menu:dir":
         reset_flow(state)
         await msg.reply_text("Выберите направление:", reply_markup=buttons(
@@ -416,126 +461,133 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                  reply_markup=home())
             return
         kind = state.get("request_type", "Заявка")
-        linked_route = state.get("client_route")
-        if linked_route:
-            if (not forum_route.configured() or
-                    linked_route.get("chat_id") != forum_route.client_chat_id() or
-                    not await forum_route.member_allowed(context.bot, update.effective_user.id)):
-                state["stage"] = "confirm"
-                await msg.reply_text("Маршрут тестового чата не подтверждён. Заявка не отправлена.")
-                return
-            target_kind = "offer" if kind == "Предложение компании" else "search"
-            linked_route = forum_route.origin(target_kind)
-            if not MANAGER_CHAT_ID:
-                state["stage"] = "confirm"
-                await msg.reply_text("Внутренний чат не настроен. Заявка не отправлена.")
-                return
+        # DM intake is assigned ONLY to the user's Telegram-verified group.
+        # Never infer a recipient group from a matching name or prior state.
+        group = await private_client.resolve_group(context.bot, update.effective_user)
+        if not group or not MANAGER_CHAT_ID:
+            state["stage"] = "confirm"
+            await msg.reply_text(
+                "Клиентская группа или внутренний чат не подтверждены. "
+                "Отправка заблокирована. Обратитесь к менеджеру.")
+            return
+        if chosen and not filter_offers(
+                [chosen], category=state.get("category"),
+                vat=state.get("vat"), amount=amount):
+            state["stage"] = "confirm"
+            await msg.reply_text(
+                "Условия предложения изменились. Начните подбор заново.")
+            return
         try:
             request_id = await asyncio.to_thread(
-                save_request, update.effective_user.id, update.effective_user.username or "",
-                kind, chosen, state["lead_inn"], amount, state["lead_comment"]
+                save_request, update.effective_user.id,
+                update.effective_user.username or "",
+                kind, chosen, state.get("lead_inn", ""), amount,
+                state.get("lead_comment", "")
             )
         except Exception:
             log.exception("Request was not saved")
             state["stage"] = "confirm"
             await msg.reply_text("Не удалось сохранить заявку. Повторите отправку.")
             return
-        manager_delivered = False
-        customer_delivered = not bool(linked_route)
-        if MANAGER_CHAT_ID:
-            inn_label = ("ИНН предлагаемой компании" if kind == "Предложение компании"
-                         else "ИНН клиента")
+
+        if kind == "Предложение компании":
             summary = (
-                f"ID предложения: {chosen.id if chosen else 'нет'}\n"
-                f"Telegram ID: {update.effective_user.id}\n"
-                f"{inn_label}: {state['lead_inn']}\n"
+                f"Компания: {state.get('prop_name', 'не указана')}\n"
+                f"ИНН предлагаемой компании: {state.get('lead_inn', '')}\n"
+                f"Направление: {state.get('prop_category', 'не указано')}\n"
+                f"НДС: {state.get('prop_vat', 'не указано')}\n"
                 f"Сумма: {rub(amount)}\n"
-                f"Комментарий: {state['lead_comment'][:600]}")
-            if kind == "Предложение компании":
-                client_summary = (
-                    f"Компания: {state.get('prop_name', 'не указана')}\n"
-                    f"Направление: {state.get('prop_category', 'не указано')}\n"
-                    f"НДС: {state.get('prop_vat', 'не указано')}\n"
-                    f"Сумма: {rub(amount)}\n"
-                    f"Условия: {state['lead_comment'][:280]}")
-            else:
-                client_summary = (
-                    f"Направление: {(chosen.category if chosen else state.get('category')) or 'По запросу'}\n"
-                    f"НДС: {(chosen.vat if chosen else state.get('vat')) or 'По согласованию'}\n"
-                    f"Сумма: {rub(amount)}\n"
-                    + (f"Предложение: {chosen.company}\n" if chosen else "")
-                    + (f"Комментарий: {state['lead_comment'][:300]}" if state['lead_comment'] else ""))
-            chat_title = ""
-            if linked_route:
-                try:
-                    origin_chat = await context.bot.get_chat(linked_route["chat_id"])
-                    chat_title = origin_chat.title or ""
-                except Exception:
-                    log.warning("Cannot resolve test client group title")
-            try:
-                await asyncio.to_thread(
-                    case_store.register, request_id, update.effective_user.id,
-                    int(MANAGER_CHAT_ID), kind, summary,
-                    origin_chat_id=(linked_route["chat_id"] if linked_route else None),
-                    origin_topic_id=(linked_route["thread_id"] if linked_route else None),
-                    origin_chat_title=chat_title,
-                    origin_username=("@" + update.effective_user.username
-                                     if update.effective_user.username else
-                                     update.effective_user.full_name[:80]),
-                    client_summary=client_summary)
-            except Exception:
-                log.exception("Request %s saved but manager case was not registered", request_id)
-            else:
-                record = case_store.find(request_id)
-                if linked_route:
-                    try:
-                        client_msg_id = await forum_route.post_group_card(context.bot, record)
-                        case_store.set_origin_message(request_id, client_msg_id)
-                        customer_delivered = True
-                    except Exception:
-                        log.exception("Client forum post failed for %s", request_id)
-                try:
-                    record = case_store.find(request_id)
-                    posted = await context.bot.send_message(
-                        chat_id=int(MANAGER_CHAT_ID),
-                        text=manager_chat.card(record) +
-                             ("\n\nНужна проверка маршрута: клиентская карточка не доставлена."
-                              if linked_route and not customer_delivered else ""),
-                        reply_markup=(manager_chat.manager_keyboard(record)
-                                      if customer_delivered else None))
-                    case_store.set_group_message(request_id, posted.message_id)
-                    manager_delivered = True
-                except Exception:
-                    log.exception("Manager notification failed for %s", request_id)
-        reset_flow(state)
-        if manager_delivered and customer_delivered:
-            await msg.reply_text(
-                f"Заявка №{request_id} принята. Карточка опубликована в нужной теме "
-                "и отправлена менеджерам." if linked_route else
-                f"Заявка №{request_id} сохранена и отправлена менеджерам.",
-                reply_markup=manager_chat.customer_keyboard(request_id))
+                f"Условия: {state.get('lead_comment', '')[:400]}"
+            )
+        elif kind == "Свободный запрос":
+            summary = "Запрос своими словами:\n" + state.get("lead_comment", "")[:1200]
         else:
+            summary = (
+                f"Направление: {(chosen.category if chosen else state.get('category')) or 'Уточняется'}\n"
+                f"НДС: {(chosen.vat if chosen else state.get('vat')) or 'По согласованию'}\n"
+                f"Сумма: {rub(amount)}\n"
+                + (f"Предложение: {chosen.company}\n" if chosen else "")
+                + (f"Комментарий: {state.get('lead_comment', '')[:600]}"
+                   if state.get('lead_comment') else "")
+            )
+        internal = (f"Клиент: {update.effective_user.id}\n"
+                    + (f"ИНН: {state['lead_inn']}\n" if state.get("lead_inn") else "")
+                    + summary)
+        try:
+            await asyncio.to_thread(
+                case_store.register, request_id,
+                update.effective_user.id, int(MANAGER_CHAT_ID), kind, internal,
+                origin_username=("@" + update.effective_user.username
+                                 if update.effective_user.username else
+                                 update.effective_user.full_name[:80]),
+                client_summary=summary,
+                client_group_id=group["chat_id"],
+                client_group_title=group["title"])
+        except Exception:
+            log.exception("Saved request %s could not be registered", request_id)
+            reset_flow(state)
             await msg.reply_text(
-                f"Заявка №{request_id} сохранена, но доставка выполнена не полностью. "
-                "Менеджеру нужно проверить маршрут. Повторно оформлять пока не нужно.")
+                f"Заявка {request_id} сохранена, но не зарегистрирована в рабочем чате. "
+                "Нужна проверка маршрута. Повторно не отправляйте.")
+            return
+        try:
+            record = case_store.find(request_id)
+            sent = await context.bot.send_message(
+                chat_id=int(MANAGER_CHAT_ID),
+                text=manager_chat.card(record),
+                reply_markup=manager_chat.manager_keyboard(record))
+            case_store.set_group_message(request_id, sent.message_id)
+        except Exception:
+            log.exception("Manager group notification failed for %s", request_id)
+            reset_flow(state)
+            await msg.reply_text(
+                f"Заявка {request_id} сохранена, но доставка менеджерам "
+                "не подтверждена. Не отправляйте повторно; нужна проверка.")
+            return
+        reset_flow(state)
+        await msg.reply_text(
+            "Заявка принята и отправлена менеджерам.\n"
+            "Статус и ответственного можно посмотреть в «Мои заявки».",
+            reply_markup=buttons([
+                [("Мои заявки", "dash:list:active")],
+                [("Новая заявка", "menu:new")],
+            ]))
     else:
         await msg.reply_text("Начните поиск заново.", reply_markup=home())
 
 
 async def message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.type != ChatType.PRIVATE:
-        if await group_dialog.text_input(update, context):
-            return
-        await manager_chat.manager_text(update, context)
+        # The client group no longer supports group-local forms.
+        if update.effective_chat.id == manager_chat.group_id():
+            await manager_chat.manager_text(update, context)
         return
-    if not permitted(update):
-        await reject(update)
+    if not await private_client.resolve_group(context.bot, update.effective_user):
+        await update.effective_message.reply_text(
+            "Ваша клиентская группа не подтверждена. Обратитесь к менеджеру.")
         return
     state = context.user_data
     txt = (update.effective_message.text or "").strip()
     stage = state.get("stage")
     if stage == "client_question":
         await manager_chat.client_question(update, context)
+        return
+    if stage == "free_text":
+        if not 8 <= len(txt) <= 1200:
+            await update.message.reply_text(
+                "Опишите задачу текстом от 8 до 1200 символов.")
+            return
+        state["request_type"] = "Свободный запрос"
+        state["lead_comment"] = txt
+        state["lead_amount"] = None
+        state["lead_inn"] = ""
+        state["stage"] = "confirm"
+        await update.message.reply_text(
+            "Проверьте свободный запрос:\\n" + txt +
+            "\\n\\nОтправить менеджеру?",
+            reply_markup=buttons([[("Подтвердить", "lead:send")],
+                                  [("Изменить", "menu:free")],
+                                  [("Отмена", "menu:start")]]))
         return
     if stage == "prop_name":
         if not 3 <= len(txt) <= 90:
@@ -645,7 +697,7 @@ def main():
     app.add_handler(CommandHandler("catalog", forum_route.entry))
     app.add_handler(CommandHandler("offer", forum_route.entry))
     app.add_handler(CommandHandler("my", manager_chat.my_cases))
-    app.add_handler(CallbackQueryHandler(group_dialog.callback, pattern=r"^gf:"))
+    app.add_handler(CallbackQueryHandler(legacy_group_button, pattern=r"^gf:"))
     app.add_handler(CallbackQueryHandler(manager_chat.manager_callback, pattern=r"^mgr:"))
     app.add_handler(CallbackQueryHandler(manager_chat.customer_callback, pattern=r"^cli:"))
     app.add_handler(CallbackQueryHandler(callback))
