@@ -136,7 +136,7 @@ async def _results(bot, chat, topic, user, token, data, page=0):
     group_forms.advance(chat, topic, user.id, token, "results", data, sent.message_id)
 
 
-async def _start(q, kind):
+async def _start(q, context, kind):
     chat = q.message.chat
     user = q.from_user
     thread = forum_route.topic_id("offer" if kind == "offer" else "search")
@@ -145,10 +145,10 @@ async def _start(q, kind):
                               "offer_name" if kind == "offer" else "search_cat", data)
     await q.answer("Форма открыта в нужной теме.")
     if kind == "offer":
-        await _prompt(q.get_bot(), chat.id, thread, user, token,
+        await _prompt(context.bot, chat.id, thread, user, token,
                       "offer_name", data, "введите название предлагаемой компании.")
     else:
-        await _choice(q.get_bot(), chat.id, thread, user, token,
+        await _choice(context.bot, chat.id, thread, user, token,
                       "search_cat", data, "выберите направление:",
                       [(name, str(i)) for i, name in enumerate(CATEGORIES)])
 
@@ -165,7 +165,7 @@ async def callback(update, context):
     chat = q.message.chat.id
 
     if len(bits) == 3 and bits[1] == "start" and bits[2] in ("search", "offer"):
-        await _start(q, bits[2])
+        await _start(q, context, bits[2])
         return
 
     if len(bits) == 3 and bits[1] in ("ask", "cancel"):
@@ -295,10 +295,13 @@ async def callback(update, context):
         try:
             await _submit(context.bot, chat, topic, user, data)
         except Exception:
-            group_forms.reset_after_failure(chat, topic, user.id, nonce)
+            # A remote save may have succeeded just before the error.
+            # Do not unlock the confirm button and risk a duplicate request.
+            group_forms.complete(chat, topic, user.id, nonce)
             log.exception("Could not submit group form")
             await _send(context.bot, chat, topic,
-                        "Не удалось обработать заявку. Проверьте маршрут; не создавайте дубликат.")
+                        "Не удалось подтвердить доставку заявки. Проверьте рабочий чат; "
+                        "не создавайте дубликат. Нужна проверка маршрута.")
             return
         group_forms.complete(chat, topic, user.id, nonce)
     else:
