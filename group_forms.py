@@ -39,6 +39,31 @@ def read(chat: int, topic: int, user: int):
         return result
 
 
+
+def _row_dict(row):
+    if not row:
+        return None
+    result = dict(row)
+    result["data"] = json.loads(result.pop("data_json"))
+    return result
+
+
+def read_token(chat: int, user: int, token: str):
+    with _db() as db:
+        row = db.execute(
+            "SELECT * FROM group_forms WHERE chat_id=? AND user_id=? AND token=?",
+            (chat, user, token)).fetchone()
+        return _row_dict(row)
+
+
+def read_prompt(chat: int, user: int, prompt_id: int):
+    with _db() as db:
+        row = db.execute(
+            "SELECT * FROM group_forms WHERE chat_id=? AND user_id=? AND prompt_id=?",
+            (chat, user, prompt_id)).fetchone()
+        return _row_dict(row)
+
+
 def begin(chat: int, topic: int, user: int, stage: str, data: dict):
     token = secrets.token_hex(5)
     with _db() as db:
