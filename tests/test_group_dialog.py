@@ -116,13 +116,17 @@ class InGroupDialogTests(unittest.IsolatedAsyncioTestCase):
         q.answer.assert_awaited()
         self.assertIsNone(group_forms.read(-1003794002701, 2, 41))
 
-    def test_customer_card_buttons_are_in_group(self):
+    def test_legacy_group_case_card_redirects_client_to_private_bot(self):
         case = {"id": "REQ-TEST", "kind": "Заявка", "status": "Новая"}
         markup = forum_route.client_keyboard(case)
         buttons = [b for row in markup.inline_keyboard for b in row]
-        self.assertTrue(all(b.url is None for b in buttons))
-        self.assertIn("gf:ask:REQ-TEST", [b.callback_data for b in buttons])
-        self.assertIn("gf:start:search", [b.callback_data for b in buttons])
+        self.assertIn("mgr:take:REQ-TEST", [b.callback_data for b in buttons])
+        self.assertIn("https://t.me/KatalogPodborBot?start=question_REQ-TEST",
+                      [b.url for b in buttons])
+        self.assertIn("https://t.me/KatalogPodborBot?start=route_s",
+                      [b.url for b in buttons])
+        self.assertTrue(all(
+            not (b.callback_data or "").startswith("gf:") for b in buttons))
 
 
 if __name__ == "__main__":
