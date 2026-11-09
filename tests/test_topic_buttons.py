@@ -19,17 +19,17 @@ class TopicButtonsTests(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         self.env.stop()
 
-    def test_menu_buttons_are_group_callbacks_not_private_links(self):
-        for kind in ("search", "offer"):
+    def test_menu_buttons_open_private_verified_bot(self):
+        for kind, payload in (("search", "route_s"), ("offer", "route_p")):
             message, markup = forum_route.button_menu(kind)
             self.assertTrue(message)
-            self.assertEqual(markup.inline_keyboard[0][0].callback_data,
-                             "gf:start:" + kind)
-            self.assertIsNone(markup.inline_keyboard[0][0].url)
+            self.assertEqual(markup.inline_keyboard[0][0].url,
+                             "https://t.me/KatalogPodborBot?start=" + payload)
+            self.assertIsNone(markup.inline_keyboard[0][0].callback_data)
         _, menu = forum_route.button_menu("general")
         self.assertEqual(len(menu.inline_keyboard), 2)
-        self.assertEqual(menu.inline_keyboard[0][0].callback_data,
-                         "gf:start:search")
+        self.assertEqual(menu.inline_keyboard[0][0].url,
+                         "https://t.me/KatalogPodborBot?start=route_s")
 
     async def test_install_routes_to_exact_two_topics_and_general(self):
         bot = SimpleNamespace(send_message=AsyncMock(side_effect=[
