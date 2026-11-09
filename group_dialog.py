@@ -121,6 +121,7 @@ async def _results(bot, chat, topic, user, token, data, page=0):
             f"{item.purpose[:130]}\n"
             f"НДС: {item.vat} | {_fmt(item.min_sum or 0)} — "
             f"{_fmt(item.max_sum) if item.max_sum is not None else 'без верхней границы'}\n"
+            f"Цена: {item.client_percent} | Срок: {item.days} дн.\n"
             f"Условия: {item.terms[:110] or 'по согласованию'}")
         rows.append([(f"Выбрать №{index+1}", f"gf:choose:{token}:{index}")])
     pages = []
