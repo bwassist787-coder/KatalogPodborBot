@@ -73,7 +73,7 @@ def button_menu(kind: str) -> tuple[str, InlineKeyboardMarkup]:
             "Нажмите кнопку, чтобы подобрать компанию по направлению, НДС и сумме. "
             "Оформление откроется в личном чате с ботом; подтверждённая заявка появится здесь.",
             InlineKeyboardMarkup([[InlineKeyboardButton(
-                "Подобрать компанию", url=link("route_s"))]]),
+                "Подобрать компанию", callback_data="gf:start:search")]]),
         )
     if kind == "offer":
         return (
@@ -81,7 +81,7 @@ def button_menu(kind: str) -> tuple[str, InlineKeyboardMarkup]:
             "Нажмите кнопку, чтобы предложить компанию и указать условия. "
             "Предложение отправится менеджерам на проверку, без автоматической публикации в каталоге.",
             InlineKeyboardMarkup([[InlineKeyboardButton(
-                "Предложить компанию", url=link("route_p"))]]),
+                "Предложить компанию", callback_data="gf:start:offer")]]),
         )
     if kind == "general":
         return (
@@ -89,8 +89,8 @@ def button_menu(kind: str) -> tuple[str, InlineKeyboardMarkup]:
             "Выберите действие. Поиск и заполнение заявки откроются в личном диалоге с ботом. "
             "Готовая заявка появится в соответствующей теме группы.",
             InlineKeyboardMarkup([
-                [InlineKeyboardButton("Подобрать компанию", url=link("route_s"))],
-                [InlineKeyboardButton("Предложить компанию", url=link("route_p"))],
+                [InlineKeyboardButton("Подобрать компанию", callback_data="gf:start:search")],
+                [InlineKeyboardButton("Предложить компанию", callback_data="gf:start:offer")],
             ]),
         )
     raise ValueError("Unsupported menu type")
@@ -148,8 +148,7 @@ def client_card(case: dict) -> str:
         f"{'Предложение клиента' if case['kind'] == 'Предложение компании' else 'Подбор компании'}\n"
         f"{case.get('client_summary') or 'Параметры заявки уточняются'}\n\n"
         f"Статус: {case['status']}\n"
-        f"Ответственный: {owner}\n"
-        f"ID: {case['id']}"
+        f"Ответственный: {owner}"
     )
 
 
@@ -159,11 +158,14 @@ def client_keyboard(case: dict):
     if case["status"] == "Новая":
         rows.append([InlineKeyboardButton("Взять в работу", callback_data="mgr:take:" + rid)])
     if case["status"] not in ("Отменена", "Завершена"):
-        rows.append([InlineKeyboardButton("Задать вопрос", url=link("question_" + rid))])
+        rows.append([InlineKeyboardButton("Задать вопрос", callback_data="gf:ask:" + rid)])
     kind = "route_p" if case["kind"] == "Предложение компании" else "route_s"
     rows.append([InlineKeyboardButton(
         "Предложить ещё компанию" if kind == "route_p" else "Новый подбор",
-        url=link(kind))])
+        callback_data="gf:start:offer" if kind == "route_p" else "gf:start:search")])
+    if case["status"] not in ("Отменена", "Завершена"):
+        rows.append([InlineKeyboardButton(
+            "Отменить заявку", callback_data="gf:cancel:" + rid)])
     return InlineKeyboardMarkup(rows)
 
 
