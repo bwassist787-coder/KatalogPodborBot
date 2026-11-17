@@ -8,6 +8,7 @@ import manager_chat
 import case_store
 import forum_route
 import private_client
+import quick_catalog
 
 from telegram import InlineKeyboardButton as Button, InlineKeyboardMarkup as Markup, Update
 from telegram.constants import ChatType
@@ -31,7 +32,7 @@ def buttons(rows):
 
 
 def home():
-    return buttons([[("Новая заявка", "menu:new")],
+    return buttons([[("Подобрать компанию", "browse:start")],
                     [("Мои заявки", "dash:list:active")],
                     [("Предложить компанию", "menu:propose")]])
 
@@ -100,7 +101,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Введите название компании, которую предлагаете:")
         return
     if payload == "route_s":
-        await update.message.reply_text("Создадим заявку. Выберите способ:", reply_markup=new_request_menu())
+        await quick_catalog.start(update.effective_message, context)
         return
     prefix = "Тестовый каталог. Компании и условия демонстрационные.\\n\\n" if TEST_MODE else ""
     await update.effective_message.reply_text(
@@ -272,10 +273,19 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.answer("Клиентская группа не подтверждена. Обратитесь к менеджеру.",
                        show_alert=True)
         return
+    if (q.data or "").startswith("browse:"):
+        await quick_catalog.callback(q, context, group)
+        return
     await q.answer()
     state, code = context.user_data, q.data or ""
     msg = q.message
-    if code == "menu:start":
+    if code in ("menu:new", "menu:filters", "menu:dir", "menu:vat"):
+        await quick_catalog.start(msg, context)
+    elif code.startswith(("cat:", "sub:", "vat:", "amount:", "page:", "pick:")):
+        await msg.reply_text(
+            "Старое меню больше не используется. Выберите категорию:",
+            reply_markup=buttons([[("Подобрать компанию", "browse:start")]]))
+    elif code == "menu:start":
         reset_flow(state)
         await msg.reply_text("Выберите действие:", reply_markup=home())
     elif code == "menu:new":
