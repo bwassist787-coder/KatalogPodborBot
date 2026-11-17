@@ -81,7 +81,7 @@ class QuickCatalogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(text.count("Срок:"), 5)
         self.assertNotIn("Назначение:", text)
         self.assertNotIn("НДС:", text)
-        self.assertIn("11,5%", text)
+        self.assertIn("10,5%", text)
         actions = [b.callback_data for row in markup.inline_keyboard for b in row]
         self.assertIn(f"browse:page:{token}:0:1", actions)
         self.assertIn(f"browse:pick:{token}:0:4", actions)
@@ -117,9 +117,9 @@ class QuickCatalogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(case["client_group_id"], -1003794002701)
         self.assertEqual(case["client_id"], 42)
         self.assertIn("Цена:", case["client_summary"])
-        self.assertIn("11", case["client_summary"])
+        self.assertIn("10,3%", case["client_summary"])
         self.assertEqual(save.call_count, 1)
-        self.assertEqual(save.call_args.args[4].id, "DEMO-003")
+        self.assertEqual(save.call_args.args[3].id, "DEMO-003")
         self.send.assert_awaited_once()
         self.assertEqual(self.send.await_args.kwargs["chat_id"], -1003759930340)
         await self.click(f"browse:send:{token}")
@@ -144,9 +144,9 @@ class QuickCatalogTests(unittest.IsolatedAsyncioTestCase):
         case = case_store.find("REQ-MANAGER")
         self.assertEqual(case["kind"], "Не нашёл нужное")
         self.assertIn("Категория:", case["client_summary"])
-        self.assertEqual(save.call_args.args[4], None)
-        self.assertEqual(save.call_args.args[5], "")
-        self.assertEqual(save.call_args.args[6], None)
+        self.assertEqual(save.call_args.args[3], None)
+        self.assertEqual(save.call_args.args[4], "")
+        self.assertEqual(save.call_args.args[5], None)
 
     async def test_old_category_buttons_and_other_sessions_cannot_pick(self):
         rows = [offer(1)]
