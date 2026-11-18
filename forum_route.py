@@ -134,7 +134,7 @@ async def entry(update, context):
     chat, message = update.effective_chat, update.effective_message
     if not chat or not message:
         return
-    if chat.type == "private":
+    if getattr(chat, "type", None) == "private":
         await message.reply_text(
             "Подбор компаний доступен только в вашей клиентской группе. "
             "Откройте тему «Предложения от Нас» и нажмите кнопку.")
