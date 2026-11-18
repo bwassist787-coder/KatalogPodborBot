@@ -140,7 +140,7 @@ async def confirm(q, context, form, offer=None):
     message_id = await _replace(q, context, intro +
                                 "\n\nПередать заявку менеджеру?", markup)
     group_forms.advance(forum_route.client_chat_id(), _search_topic(),
-                        form["user_id"], form["token"], "quick_confirm",
+                        form["user_id"], form["token"], "confirm",
                         data, message_id)
 
 
@@ -352,10 +352,10 @@ async def callback(update, context):
     elif action == "manager" and form["stage"] == "quick_results":
         await q.answer()
         await confirm(q, context, form)
-    elif action == "back" and form["stage"] == "quick_confirm":
+    elif action == "back" and form["stage"] == "confirm":
         await q.answer()
         await show_page(q, context, form, form["data"]["page"])
-    elif action == "send" and form["stage"] == "quick_confirm":
+    elif action == "send" and form["stage"] == "confirm":
         if not group_forms.claim_submit(
                 forum_route.client_chat_id(), _search_topic(),
                 q.from_user.id, token, q.message.message_id):
