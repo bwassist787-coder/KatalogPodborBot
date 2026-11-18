@@ -159,25 +159,6 @@ async def setup_topics(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def legacy_group_button(update, context):
-    """Old topic buttons no longer create cases; send users to private intake."""
-    q = update.callback_query
-    if not q:
-        return
-    if not update.effective_chat or update.effective_chat.id != forum_route.client_chat_id():
-        await q.answer("Недоступная группа", show_alert=True)
-        return
-    await q.answer("Заявки теперь создаются в личном чате с ботом.")
-    try:
-        await q.message.reply_text(
-            "Откройте личный чат с ботом и создайте заявку кнопкой.",
-            reply_markup=Markup([[Button(
-                "Открыть бота", url=forum_route.link("route_s"))]]),
-        )
-    except Exception:
-        log.exception("Cannot send redirect for old group button")
-
-
 async def offers():
     return await asyncio.to_thread(read_offers)
 
