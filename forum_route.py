@@ -132,7 +132,14 @@ async def install_menus(bot) -> dict[str, int]:
 async def entry(update, context):
     """Post an in-group action menu only in the allowlisted client group."""
     chat, message = update.effective_chat, update.effective_message
-    if not chat or not message or chat.id != client_chat_id() or not configured():
+    if not chat or not message:
+        return
+    if chat.type == "private":
+        await message.reply_text(
+            "Подбор компаний доступен только в вашей клиентской группе. "
+            "Откройте тему «Предложения от Нас» и нажмите кнопку.")
+        return
+    if chat.id != client_chat_id() or not configured():
         return
     command = (message.text or "").split()[0].split("@")[0].lower()
     kind = "offer" if command == "/offer" else "search"
