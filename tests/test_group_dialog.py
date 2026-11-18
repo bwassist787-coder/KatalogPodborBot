@@ -31,7 +31,9 @@ class InGroupDialogTests(unittest.IsolatedAsyncioTestCase):
         async def send_message(**kwargs):
             self.sent += 1
             return SimpleNamespace(message_id=100 + self.sent, **kwargs)
-        self.bot = SimpleNamespace(send_message=AsyncMock(side_effect=send_message))
+        self.bot = SimpleNamespace(
+            send_message=AsyncMock(side_effect=send_message),
+            get_chat_member=AsyncMock(return_value=SimpleNamespace(status="member")))
         self.context = SimpleNamespace(bot=self.bot)
 
     def tearDown(self):
@@ -51,21 +53,21 @@ class InGroupDialogTests(unittest.IsolatedAsyncioTestCase):
         update, q = self.fake_update(self.user, "gf:start:search")
         await group_dialog.callback(update, self.context)
         form = group_forms.read(-1003794002701, 3, 41)
-        self.assertEqual(form["stage"], "search_cat")
+        self.assertEqual(form["stage"], "quick_category")
         self.assertEqual(self.bot.send_message.await_args.kwargs["chat_id"],
                          -1003794002701)
         self.assertEqual(self.bot.send_message.await_args.kwargs["message_thread_id"], 3)
         self.assertEqual(self.bot.send_message.await_args.kwargs["reply_markup"]
-                         .inline_keyboard[0][0].callback_data[:14], "gf:search_cat:")
+                         .inline_keyboard[0][0].callback_data[:7], "qg:cat:")
 
     async def test_offer_and_search_states_are_isolated_by_topic_and_user(self):
         for who, kind in [(self.user, "search"), (self.user, "offer"),
                           (self.other, "search")]:
             update, _ = self.fake_update(who, "gf:start:" + kind)
             await group_dialog.callback(update, self.context)
-        self.assertEqual(group_forms.read(-1003794002701, 3, 41)["stage"], "search_cat")
+        self.assertEqual(group_forms.read(-1003794002701, 3, 41)["stage"], "quick_category")
         self.assertEqual(group_forms.read(-1003794002701, 2, 41)["stage"], "offer_name")
-        self.assertEqual(group_forms.read(-1003794002701, 3, 42)["stage"], "search_cat")
+        self.assertEqual(group_forms.read(-1003794002701, 3, 42)["stage"], "quick_category")
 
     async def test_another_client_cannot_use_someone_elses_form_buttons(self):
         update, _ = self.fake_update(self.user, "gf:start:search")
@@ -78,7 +80,7 @@ class InGroupDialogTests(unittest.IsolatedAsyncioTestCase):
         await group_dialog.callback(update2, self.context)
         self.assertEqual(self.bot.send_message.await_count, previous)
         q.answer.assert_awaited()
-        self.assertEqual(group_forms.read(-1003794002701, 3, 41)["stage"], "search_cat")
+        self.assertEqual(group_forms.read(-1003794002701, 3, 41)["stage"], "quick_category")
 
     async def test_replies_must_target_same_users_last_prompt(self):
         update, _ = self.fake_update(self.user, "gf:start:offer")
@@ -116,17 +118,16 @@ class InGroupDialogTests(unittest.IsolatedAsyncioTestCase):
         q.answer.assert_awaited()
         self.assertIsNone(group_forms.read(-1003794002701, 2, 41))
 
-    def test_legacy_group_case_card_redirects_client_to_private_bot(self):
+    def test_client_status_card_actions_stay_in_group(self):
         case = {"id": "REQ-TEST", "kind": "Заявка", "status": "Новая"}
         markup = forum_route.client_keyboard(case)
         buttons = [b for row in markup.inline_keyboard for b in row]
-        self.assertIn("mgr:take:REQ-TEST", [b.callback_data for b in buttons])
-        self.assertIn("https://t.me/KatalogPodborBot?start=question_REQ-TEST",
-                      [b.url for b in buttons])
-        self.assertIn("https://t.me/KatalogPodborBot?start=route_s",
-                      [b.url for b in buttons])
-        self.assertTrue(all(
-            not (b.callback_data or "").startswith("gf:") for b in buttons))
+        codes = [b.callback_data for b in buttons]
+        self.assertTrue(all(b.url is None for b in buttons))
+        self.assertIn("mgr:take:REQ-TEST", codes)
+        self.assertIn("gf:ask:REQ-TEST", codes)
+        self.assertIn("gf:cancel:REQ-TEST", codes)
+        self.assertIn("qg:start:search", codes)
 
 
 if __name__ == "__main__":
