@@ -127,6 +127,8 @@ async def confirm(q, context, form, offer=None):
     data = form["data"]
     data["choice"] = "company" if offer else "manager"
     data["selected_id"] = offer.id if offer else None
+    data["selected_price"] = offer.client_percent if offer else None
+    data["selected_days"] = offer.days if offer else None
     if offer:
         intro = "Вы выбрали компанию:\n\n" + card(offer, 1)[3:]
     else:
@@ -169,6 +171,13 @@ async def send_request(q, context, form):
             return
         if not offer:
             await _post(context.bot, "Компания больше не доступна. Начните подбор заново.",
+                        menu([[("Новый подбор", "qg:start:search")]]))
+            return
+        if (offer.client_percent != data.get("selected_price") or
+                offer.days != data.get("selected_days")):
+            await _post(context.bot,
+                        "Цена или срок компании изменились. Проверьте новый список "
+                        "и подтвердите выбор заново.",
                         menu([[("Новый подбор", "qg:start:search")]]))
             return
     elif data.get("choice") != "manager":
