@@ -130,9 +130,9 @@ async def notify_client(bot, rid, text, offer=False):
             chat_id=case["origin_chat_id"],
             message_thread_id=case["origin_topic_id"], text=text)
     else:
-        await bot.send_message(
-            chat_id=case["client_id"], text=text,
-            reply_markup=customer_keyboard(rid, offer=offer))
+        # Legacy DM-origin cases must not receive messages in private chat.
+        # An operator must verify and migrate their route explicitly.
+        raise ValueError("Legacy private route disabled; manual route check required")
 
 
 def manager_label(user):
@@ -209,7 +209,7 @@ async def manager_callback(update, context):
         try:
             await notify_client(context.bot, rid,
                                 "Заявка " + rid + " принята в работу.\n"
-                                "Менеджер свяжется с вами через бота.")
+                                "Менеджер продолжит работу в вашей клиентской теме.")
         except Exception:
             log.exception("Failed to notify client %s about take", rid)
         return

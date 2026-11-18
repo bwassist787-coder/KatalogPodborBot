@@ -8,7 +8,8 @@ import manager_chat
 import case_store
 import forum_route
 import private_client
-import quick_catalog
+import group_quick_catalog
+import group_dialog
 
 from telegram import InlineKeyboardButton as Button, InlineKeyboardMarkup as Markup, Update
 from telegram.constants import ChatType
@@ -71,42 +72,22 @@ def reset_flow(state):
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.type != ChatType.PRIVATE:
-        return
-    group = await private_client.resolve_group(context.bot, update.effective_user)
-    if not group:
+    """Client features are exclusively available in the allowlisted group."""
+    chat = update.effective_chat
+    if chat.type == ChatType.PRIVATE:
+        context.user_data.clear()
         await update.effective_message.reply_text(
-            "Создание заявок доступно только участникам подключённого клиентского чата. "
-            "Если вы уже состоите в группе, обратитесь к менеджеру для проверки привязки.")
+            "Подбор компаний и создание заявок доступны только в вашем "
+            "клиентском Telegram-чате. Откройте группу и нажмите "
+            "«Подобрать компанию» или «Предложить компанию». "
+            "В личных сообщениях бот заявки не принимает.")
         return
-    payload = (context.args or [""])[0] if context.args else ""
-    reset_flow(context.user_data)
-    if payload.startswith("question_"):
-        rid = payload[len("question_"):]
-        case = case_store.find(rid)
-        if not private_client.case_belongs_to_client(
-                case, update.effective_user.id, group["chat_id"]):
-            await update.message.reply_text("Заявка недоступна.")
-            return
-        if case["status"] not in ("Новая", "В работе"):
-            await update.message.reply_text("Заявка уже закрыта.")
-            return
-        context.user_data["stage"] = "client_question"
-        context.user_data["question_case"] = rid
-        await update.message.reply_text("Напишите вопрос по заявке:")
+    if not forum_route.configured() or chat.id != forum_route.client_chat_id():
         return
-    if payload == "route_p":
-        context.user_data["request_type"] = "Предложение компании"
-        context.user_data["stage"] = "prop_name"
-        await update.message.reply_text("Введите название компании, которую предлагаете:")
+    if not await forum_route.member_allowed(context.bot, update.effective_user.id):
         return
-    if payload == "route_s":
-        await quick_catalog.start(update.effective_message, context)
-        return
-    prefix = "Тестовый каталог. Компании и условия демонстрационные.\\n\\n" if TEST_MODE else ""
-    await update.effective_message.reply_text(
-        prefix + "Клиентская группа: " + group["title"] +
-        "\\nВыберите действие:", reply_markup=home())
+    text, keyboard = forum_route.button_menu("general")
+    await update.effective_message.reply_text(text, reply_markup=keyboard)
 
 
 async def whoami(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -178,25 +159,6 @@ async def setup_topics(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def legacy_group_button(update, context):
-    """Old topic buttons no longer create cases; send users to private intake."""
-    q = update.callback_query
-    if not q:
-        return
-    if not update.effective_chat or update.effective_chat.id != forum_route.client_chat_id():
-        await q.answer("Недоступная группа", show_alert=True)
-        return
-    await q.answer("Заявки теперь создаются в личном чате с ботом.")
-    try:
-        await q.message.reply_text(
-            "Откройте личный чат с ботом и создайте заявку кнопкой.",
-            reply_markup=Markup([[Button(
-                "Открыть бота", url=forum_route.link("route_s"))]]),
-        )
-    except Exception:
-        log.exception("Cannot send redirect for old group button")
-
-
 async def offers():
     return await asyncio.to_thread(read_offers)
 
@@ -264,423 +226,34 @@ async def show_results(message, context, page=0):
 
 
 async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Old private catalog buttons never create requests."""
     q = update.callback_query
-    if update.effective_chat.type != ChatType.PRIVATE:
-        await q.answer("Заявки оформляются только в личном чате.", show_alert=True)
+    if not q:
         return
-    group = await private_client.resolve_group(context.bot, update.effective_user)
-    if not group:
-        await q.answer("Клиентская группа не подтверждена. Обратитесь к менеджеру.",
-                       show_alert=True)
-        return
-    if (q.data or "").startswith("browse:"):
-        await quick_catalog.callback(q, context, group)
-        return
-    await q.answer()
-    state, code = context.user_data, q.data or ""
-    msg = q.message
-    if code in ("menu:new", "menu:filters", "menu:dir", "menu:vat"):
-        await quick_catalog.start(msg, context)
-    elif code.startswith(("cat:", "sub:", "vat:", "amount:", "page:", "pick:")):
-        await msg.reply_text(
-            "Старое меню больше не используется. Выберите категорию:",
-            reply_markup=buttons([[("Подобрать компанию", "browse:start")]]))
-    elif code == "menu:start":
-        reset_flow(state)
-        await msg.reply_text("Выберите действие:", reply_markup=home())
-    elif code == "menu:new":
-        reset_flow(state)
-        await msg.reply_text("Как оформить новую заявку?", reply_markup=new_request_menu())
-    elif code == "menu:filters":
-        reset_flow(state)
-        await msg.reply_text("Подбор по параметрам:", reply_markup=filter_menu())
-    elif code == "menu:free":
-        reset_flow(state)
-        state["request_type"] = "Свободный запрос"
-        state["stage"] = "free_text"
-        await msg.reply_text(
-            "Опишите задачу своими словами (до 1200 символов): какая компания "
-            "нужна, сумма, услуги и любые важные условия. "
-            "Необязательные сведения уточнит менеджер.")
-    elif code in ("dash:list:active", "dash:list:closed"):
-        reset_flow(state)
-        section = "closed" if code.endswith("closed") else "active"
-        await private_client.show_my_cases(msg, context, group, state=section)
-    elif code.startswith("dash:view:"):
-        await private_client.show_case(
-            msg, context, code[len("dash:view:"):], update.effective_user, group)
-    elif code == "menu:dir":
-        reset_flow(state)
-        await msg.reply_text("Выберите направление:", reply_markup=buttons(
-            [[(name, f"cat:{i}")] for i, name in enumerate(CATEGORIES)]
-            + [[("Главное меню", "menu:start")]]
-        ))
-    elif code == "menu:vat":
-        reset_flow(state)
-        await msg.reply_text("Выберите НДС:", reply_markup=buttons(
-            [[(name, f"vat:{i}")] for i, name in enumerate(VAT)]
-            + [[("Главное меню", "menu:start")]]
-        ))
-    elif code.startswith("cat:"):
-        try:
-            index = int(code[4:])
-            if not 0 <= index < len(CATEGORIES):
-                raise ValueError
-            category = CATEGORIES[index]
-        except ValueError:
-            await msg.reply_text("Неизвестная категория. Начните заново.", reply_markup=home())
-            return
-        reset_flow(state)
-        state["category"] = category
-        try:
-            subcategories = sorted({o.subcategory for o in filter_offers(await offers(), category=category)
-                                    if o.subcategory})
-        except Exception:
-            log.exception("Catalog failed")
-            await msg.reply_text("Каталог временно недоступен.")
-            return
-        if not subcategories:
-            await show_results(msg, context)
-            return
-        state["sub_options"] = subcategories[:40]
-        await msg.reply_text("Выберите подкатегорию:", reply_markup=buttons(
-            [[(name[:55], f"sub:{i}")] for i, name in enumerate(state["sub_options"])]
-            + [[("Все предложения", "sub:all")], [("Главное меню", "menu:start")]]
-        ))
-    elif code.startswith("sub:"):
-        if "category" not in state:
-            await msg.reply_text("Выберите направление заново.", reply_markup=home())
-            return
-        if code == "sub:all":
-            state.pop("subcategory", None)
-        else:
-            try:
-                index = int(code[4:])
-                if not 0 <= index < len(state["sub_options"]):
-                    raise ValueError
-                state["subcategory"] = state["sub_options"][index]
-            except (KeyError, ValueError):
-                await msg.reply_text("Начните поиск заново.", reply_markup=home())
-                return
-        await show_results(msg, context)
-    elif code.startswith("vat:"):
-        try:
-            index = int(code[4:])
-            if not 0 <= index < len(VAT):
-                raise ValueError
-            state["vat"] = VAT[index]
-        except ValueError:
-            await msg.reply_text("Начните поиск заново.", reply_markup=home())
-            return
-        state["stage"] = "filter_amount"
-        await msg.reply_text("Введите сумму в рублях, например 500000:",
-                             reply_markup=buttons([[("Любая сумма", "amount:any")]]))
-    elif code == "amount:any":
-        if state.get("stage") != "filter_amount":
-            await msg.reply_text("Начните поиск заново.", reply_markup=home())
-            return
-        state.pop("stage", None)
-        state.pop("filter_amount", None)
-        await show_results(msg, context)
-    elif code.startswith("page:"):
-        try:
-            page = int(code[5:])
-        except ValueError:
-            return
-        if not any(k in state for k in ("category", "vat")):
-            await msg.reply_text("Начните поиск заново.", reply_markup=home())
-            return
-        await show_results(msg, context, page)
-    elif code.startswith("pick:"):
-        if not any(k in state for k in ("category", "vat")):
-            await msg.reply_text("Начните поиск заново.", reply_markup=home())
-            return
-        try:
-            index = int(code[5:])
-            filtered = by_state(await offers(), state)
-            if not 0 <= index < len(filtered):
-                raise ValueError
-            selected = filtered[index]
-        except ValueError:
-            await msg.reply_text("Предложение изменилось. Начните заново.", reply_markup=home())
-            return
-        except Exception:
-            log.exception("Could not verify offer")
-            await msg.reply_text("Не удалось проверить предложение. Попробуйте позже.")
-            return
-        state["selected_id"] = selected.id
-        state["stage"] = "lead_inn"
-        await msg.reply_text("Введите ИНН вашей компании (10 или 12 цифр):")
-    elif code == "menu:propose":
-        reset_flow(state)
-        state["request_type"] = "Предложение компании"
-        state["stage"] = "prop_name"
-        await msg.reply_text("Введите название компании, которую предлагаете:")
-    elif code.startswith("prop:cat:"):
-        if state.get("stage") != "prop_category":
-            await msg.reply_text("Начните предложение заново.", reply_markup=home())
-            return
-        try:
-            state["prop_category"] = CATEGORIES[int(code.split(":")[-1])]
-        except (ValueError, IndexError):
-            await msg.reply_text("Неизвестное направление.")
-            return
-        state["stage"] = "prop_vat"
-        await msg.reply_text("Условия НДС:", reply_markup=buttons(
-            [[(v, "prop:vat:" + str(i))] for i, v in enumerate(VAT[1:])]))
-    elif code.startswith("prop:vat:"):
-        if state.get("stage") != "prop_vat":
-            await msg.reply_text("Начните предложение заново.", reply_markup=home())
-            return
-        try:
-            state["prop_vat"] = VAT[1:][int(code.split(":")[-1])]
-        except (ValueError, IndexError):
-            await msg.reply_text("Неизвестный вариант НДС.")
-            return
-        state["stage"] = "prop_amount"
-        await msg.reply_text("На какую сумму можете предложить компанию? Введите число в рублях:")
-    elif code == "menu:missing":
-        reset_flow(state)
-        state["request_type"] = "Не нашёл нужное"
-        state["stage"] = "lead_inn"
-        await msg.reply_text("Введите ИНН вашей компании (10 или 12 цифр):")
-    elif code == "lead:send":
-        if state.get("stage") != "confirm":
-            await msg.reply_text("Начните оформление заново.", reply_markup=home())
-            return
-        state["stage"] = "saving"
-        chosen = None
-        if state.get("selected_id"):
-            try:
-                chosen = next((o for o in await offers() if o.id == state["selected_id"]), None)
-            except Exception:
-                log.exception("Cannot recheck offer")
-                state["stage"] = "confirm"
-                await msg.reply_text("Проверка предложения недоступна. Повторите позже.")
-                return
-            if chosen is None:
-                reset_flow(state)
-                await msg.reply_text("Предложение снято с каталога. Заявка не отправлена.",
-                                     reply_markup=home())
-                return
-        amount = state["lead_amount"]
-        if chosen and ((chosen.min_sum is not None and amount < chosen.min_sum)
-                       or (chosen.max_sum is not None and amount > chosen.max_sum)):
-            reset_flow(state)
-            await msg.reply_text("Условия предложения изменились. Заявка не отправлена.",
-                                 reply_markup=home())
-            return
-        kind = state.get("request_type", "Заявка")
-        # DM intake is assigned ONLY to the user's Telegram-verified group.
-        # Never infer a recipient group from a matching name or prior state.
-        group = await private_client.resolve_group(context.bot, update.effective_user)
-        if not group or not MANAGER_CHAT_ID:
-            state["stage"] = "confirm"
-            await msg.reply_text(
-                "Клиентская группа или внутренний чат не подтверждены. "
-                "Отправка заблокирована. Обратитесь к менеджеру.")
-            return
-        if chosen and not filter_offers(
-                [chosen], category=state.get("category"),
-                vat=state.get("vat"), amount=amount):
-            state["stage"] = "confirm"
-            await msg.reply_text(
-                "Условия предложения изменились. Начните подбор заново.")
-            return
-        try:
-            request_id = await asyncio.to_thread(
-                save_request, update.effective_user.id,
-                update.effective_user.username or "",
-                kind, chosen, state.get("lead_inn", ""), amount,
-                state.get("lead_comment", "")
-            )
-        except Exception:
-            log.exception("Request was not saved")
-            state["stage"] = "confirm"
-            await msg.reply_text("Не удалось сохранить заявку. Повторите отправку.")
-            return
-
-        if kind == "Предложение компании":
-            summary = (
-                f"Компания: {state.get('prop_name', 'не указана')}\n"
-                f"ИНН предлагаемой компании: {state.get('lead_inn', '')}\n"
-                f"Направление: {state.get('prop_category', 'не указано')}\n"
-                f"НДС: {state.get('prop_vat', 'не указано')}\n"
-                f"Сумма: {rub(amount)}\n"
-                f"Условия: {state.get('lead_comment', '')[:400]}"
-            )
-        elif kind == "Свободный запрос":
-            summary = "Запрос своими словами:\n" + state.get("lead_comment", "")[:1200]
-        else:
-            summary = (
-                f"Направление: {(chosen.category if chosen else state.get('category')) or 'Уточняется'}\n"
-                f"НДС: {(chosen.vat if chosen else state.get('vat')) or 'По согласованию'}\n"
-                f"Сумма: {rub(amount)}\n"
-                + (f"Предложение: {chosen.company}\n" if chosen else "")
-                + (f"Комментарий: {state.get('lead_comment', '')[:600]}"
-                   if state.get('lead_comment') else "")
-            )
-        internal = (f"Клиент: {update.effective_user.id}\n"
-                    + (f"ИНН: {state['lead_inn']}\n" if state.get("lead_inn") else "")
-                    + summary)
-        try:
-            await asyncio.to_thread(
-                case_store.register, request_id,
-                update.effective_user.id, int(MANAGER_CHAT_ID), kind, internal,
-                origin_username=("@" + update.effective_user.username
-                                 if update.effective_user.username else
-                                 update.effective_user.full_name[:80]),
-                client_summary=summary,
-                client_group_id=group["chat_id"],
-                client_group_title=group["title"])
-        except Exception:
-            log.exception("Saved request %s could not be registered", request_id)
-            reset_flow(state)
-            await msg.reply_text(
-                f"Заявка {request_id} сохранена, но не зарегистрирована в рабочем чате. "
-                "Нужна проверка маршрута. Повторно не отправляйте.")
-            return
-        try:
-            record = case_store.find(request_id)
-            sent = await context.bot.send_message(
-                chat_id=int(MANAGER_CHAT_ID),
-                text=manager_chat.card(record),
-                reply_markup=manager_chat.manager_keyboard(record))
-            case_store.set_group_message(request_id, sent.message_id)
-        except Exception:
-            log.exception("Manager group notification failed for %s", request_id)
-            reset_flow(state)
-            await msg.reply_text(
-                f"Заявка {request_id} сохранена, но доставка менеджерам "
-                "не подтверждена. Не отправляйте повторно; нужна проверка.")
-            return
-        reset_flow(state)
-        await msg.reply_text(
-            "Заявка принята и отправлена менеджерам.\n"
-            "Статус и ответственного можно посмотреть в «Мои заявки».",
-            reply_markup=buttons([
-                [("Мои заявки", "dash:list:active")],
-                [("Новая заявка", "menu:new")],
-            ]))
+    if update.effective_chat.type == ChatType.PRIVATE:
+        await q.answer(
+            "Подбор доступен только в клиентской группе.", show_alert=True)
     else:
-        await msg.reply_text("Начните поиск заново.", reply_markup=home())
+        await q.answer(
+            "Это старое меню. Откройте обновлённое меню группы.",
+            show_alert=True)
 
 
 async def message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_chat.type != ChatType.PRIVATE:
-        # The client group no longer supports group-local forms.
-        if update.effective_chat.id == manager_chat.group_id():
-            await manager_chat.manager_text(update, context)
-        return
-    if not await private_client.resolve_group(context.bot, update.effective_user):
+    chat = update.effective_chat
+    if chat.type == ChatType.PRIVATE:
+        context.user_data.clear()
         await update.effective_message.reply_text(
-            "Ваша клиентская группа не подтверждена. Обратитесь к менеджеру.")
+            "Заявки и подбор компаний оформляются только в клиентской группе. "
+            "Перейдите в чат и используйте кнопки меню.")
         return
-    state = context.user_data
-    txt = (update.effective_message.text or "").strip()
-    stage = state.get("stage")
-    if stage == "client_question":
-        await manager_chat.client_question(update, context)
+    if (forum_route.configured() and
+            chat.id == forum_route.client_chat_id()):
+        if await group_dialog.text_input(update, context):
+            return
         return
-    if stage == "free_text":
-        if not 8 <= len(txt) <= 1200:
-            await update.message.reply_text(
-                "Опишите задачу текстом от 8 до 1200 символов.")
-            return
-        state["request_type"] = "Свободный запрос"
-        state["lead_comment"] = txt
-        state["lead_amount"] = None
-        state["lead_inn"] = ""
-        state["stage"] = "confirm"
-        await update.message.reply_text(
-            "Проверьте свободный запрос:\\n" + txt +
-            "\\n\\nОтправить менеджеру?",
-            reply_markup=buttons([[("Подтвердить", "lead:send")],
-                                  [("Изменить", "menu:free")],
-                                  [("Отмена", "menu:start")]]))
-        return
-    if stage == "prop_name":
-        if not 3 <= len(txt) <= 90:
-            await update.message.reply_text("Введите название от 3 до 90 символов.")
-            return
-        state["prop_name"] = txt
-        state["stage"] = "prop_inn"
-        await update.message.reply_text("Введите ИНН предлагаемой компании (10 или 12 цифр):")
-        return
-    if stage == "prop_inn":
-        if not re.fullmatch(r"(?:\d{10}|\d{12})", txt):
-            await update.message.reply_text("ИНН должен содержать 10 или 12 цифр.")
-            return
-        state["lead_inn"] = txt
-        state["stage"] = "prop_category"
-        await update.message.reply_text(
-            "Выберите направление компании:",
-            reply_markup=buttons([[(name, f"prop:cat:{i}")]
-                                  for i, name in enumerate(CATEGORIES)]))
-        return
-    if stage == "prop_amount":
-        cleaned = txt.replace(" ", "").replace("₽", "")
-        if not cleaned.isdecimal() or int(cleaned) <= 0:
-            await update.message.reply_text("Введите положительную сумму цифрами.")
-            return
-        state["lead_amount"] = int(cleaned)
-        state["stage"] = "prop_comment"
-        await update.message.reply_text("Напишите условия предложения (до 300 символов):")
-        return
-    if stage == "prop_comment":
-        if not 1 <= len(txt) <= 300:
-            await update.message.reply_text("Напишите условия до 300 символов.")
-            return
-        state["lead_comment"] = (
-            f"Компания: {state['prop_name']}; "
-            f"Направление: {state['prop_category']}; "
-            f"НДС: {state['prop_vat']}; "
-            f"Условия: {txt}")
-        state["stage"] = "confirm"
-        await update.message.reply_text(
-            "Проверьте предложение:\n"
-            f"{state['lead_comment']}\n"
-            f"ИНН: {state['lead_inn']}\n"
-            f"Сумма: {rub(state['lead_amount'])}\n"
-            "Отправить менеджерам? (в каталог автоматически не попадёт)",
-            reply_markup=buttons([[("Подтвердить", "lead:send")],
-                                  [("Отмена", "menu:start")]]))
-        return
-    if stage in ("filter_amount", "lead_amount"):
-        cleaned = txt.replace(" ", "").replace("₽", "")
-        if not cleaned.isdecimal() or int(cleaned) <= 0:
-            await update.message.reply_text("Введите сумму цифрами, например 500000.")
-            return
-        if stage == "filter_amount":
-            state["filter_amount"] = int(cleaned)
-            state.pop("stage", None)
-            await show_results(update.message, context)
-        else:
-            state["lead_amount"] = int(cleaned)
-            state["stage"] = "lead_comment"
-            await update.message.reply_text("Напишите комментарий (или «-», если его нет):")
-    elif stage == "lead_inn":
-        if not re.fullmatch(r"(?:\d{10}|\d{12})", txt):
-            await update.message.reply_text("ИНН: только 10 или 12 цифр. Повторите ввод.")
-            return
-        state["lead_inn"] = txt
-        state["stage"] = "lead_amount"
-        await update.message.reply_text("Введите сумму заявки в рублях:")
-    elif stage == "lead_comment":
-        if len(txt) > 600 or (state.get("request_type") == "Не нашёл нужное" and txt == "-"):
-            await update.message.reply_text("Уточните, что нужно найти (до 600 символов).")
-            return
-        state["lead_comment"] = "" if txt == "-" else txt
-        state["stage"] = "confirm"
-        await update.message.reply_text(
-            f"Проверьте заявку:\nИНН: {state['lead_inn']}\n"
-            f"Сумма: {rub(state['lead_amount'])}\n"
-            f"Комментарий: {state['lead_comment'] or 'нет'}\nОтправить?",
-            reply_markup=buttons([[("Подтвердить", "lead:send")],
-                                  [("Отмена", "menu:start")]])
-        )
-    else:
-        await update.message.reply_text("Откройте меню командой /start.", reply_markup=home())
+    if chat.id == manager_chat.group_id():
+        await manager_chat.manager_text(update, context)
 
 
 async def on_error(update, context):
@@ -707,9 +280,9 @@ def main():
     app.add_handler(CommandHandler("catalog", forum_route.entry))
     app.add_handler(CommandHandler("offer", forum_route.entry))
     app.add_handler(CommandHandler("my", manager_chat.my_cases))
-    app.add_handler(CallbackQueryHandler(legacy_group_button, pattern=r"^gf:"))
+    app.add_handler(CallbackQueryHandler(group_quick_catalog.callback, pattern=r"^qg:"))
+    app.add_handler(CallbackQueryHandler(group_dialog.callback, pattern=r"^gf:"))
     app.add_handler(CallbackQueryHandler(manager_chat.manager_callback, pattern=r"^mgr:"))
-    app.add_handler(CallbackQueryHandler(manager_chat.customer_callback, pattern=r"^cli:"))
     app.add_handler(CallbackQueryHandler(callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message))
     app.add_error_handler(on_error)

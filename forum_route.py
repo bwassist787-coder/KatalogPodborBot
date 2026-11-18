@@ -66,31 +66,37 @@ def group_topic_matches(chat_id: int, thread_id: int | None, kind: str) -> bool:
 
 
 def button_menu(kind: str) -> tuple[str, InlineKeyboardMarkup]:
-    """User-facing, command-free entry menus; no internal company data."""
+    """Buttons handle all client actions within the allowlisted forum."""
     if kind == "search":
         return (
             "Наши предложения\n\n"
-            "Нажмите кнопку, чтобы подобрать компанию по направлению, НДС и сумме. "
-            "Оформление заявки откроется в личном чате с ботом.",
+            "Выберите категорию, затем компанию из списка. Все действия "
+            "проходят в этой теме — без перехода в личный чат.",
             InlineKeyboardMarkup([[InlineKeyboardButton(
-                "Подобрать компанию", url=link("route_s"))]]),
+                "Подобрать компанию", callback_data="qg:start:search")],
+                [InlineKeyboardButton(
+                "Мои заявки", callback_data="qg:mine")]]),
         )
     if kind == "offer":
         return (
             "Предложения клиента\n\n"
-            "Нажмите кнопку, чтобы предложить компанию в личном чате с ботом. "
-            "Предложение отправится менеджерам на проверку, без автоматической публикации в каталоге.",
+            "Предложите свою компанию. Бот уточнит реквизиты и условия "
+            "прямо в этой теме и передаст предложение на проверку менеджерам.",
             InlineKeyboardMarkup([[InlineKeyboardButton(
-                "Предложить компанию", url=link("route_p"))]]),
+                "Предложить компанию", callback_data="gf:start:offer")]]),
         )
     if kind == "general":
         return (
             "Каталог компаний\n\n"
-            "Выберите действие. Заявка оформляется в личных сообщениях боту. "
-            "Готовая заявка появится в соответствующей теме группы.",
+            "Выберите действие — бот продолжит работу в соответствующей теме группы. "
+            "Личные сообщения бота для подбора не используются.",
             InlineKeyboardMarkup([
-                [InlineKeyboardButton("Подобрать компанию", url=link("route_s"))],
-                [InlineKeyboardButton("Предложить компанию", url=link("route_p"))],
+                [InlineKeyboardButton("Подобрать компанию",
+                                     callback_data="qg:start:search")],
+                [InlineKeyboardButton("Предложить компанию",
+                                     callback_data="gf:start:offer")],
+                [InlineKeyboardButton("Мои заявки",
+                                     callback_data="qg:mine")],
             ]),
         )
     raise ValueError("Unsupported menu type")
@@ -124,9 +130,16 @@ async def install_menus(bot) -> dict[str, int]:
 
 
 async def entry(update, context):
-    """Display a private-bot launch button ONLY in the configured client group."""
+    """Post an in-group action menu only in the allowlisted client group."""
     chat, message = update.effective_chat, update.effective_message
-    if not chat or not message or chat.id != client_chat_id() or not configured():
+    if not chat or not message:
+        return
+    if getattr(chat, "type", None) == "private":
+        await message.reply_text(
+            "Подбор компаний доступен только в вашей клиентской группе. "
+            "Откройте тему «Предложения от Нас» и нажмите кнопку.")
+        return
+    if chat.id != client_chat_id() or not configured():
         return
     command = (message.text or "").split()[0].split("@")[0].lower()
     kind = "offer" if command == "/offer" else "search"
@@ -153,18 +166,24 @@ def client_card(case: dict) -> str:
 
 
 def client_keyboard(case: dict):
-    """Legacy group cards remain readable; interactions move to verified DM."""
+    """All public buttons act within the client group; manager-only action
+    permissions are enforced by the callback handler, not button visibility.
+    """
     rid = case["id"]
     rows = []
     if case["status"] == "Новая":
-        rows.append([InlineKeyboardButton("Взять в работу", callback_data="mgr:take:" + rid)])
-    if case["status"] not in ("Отменена", "Завершена"):
         rows.append([InlineKeyboardButton(
-            "Задать вопрос в личном чате", url=link("question_" + rid))])
-    payload = "route_p" if case["kind"] == "Предложение компании" else "route_s"
+            "Взять в работу", callback_data="mgr:take:" + rid)])
+    if case["status"] in ("Новая", "В работе"):
+        rows.append([InlineKeyboardButton(
+            "Задать вопрос", callback_data="gf:ask:" + rid)])
+        rows.append([InlineKeyboardButton(
+            "Отменить заявку", callback_data="gf:cancel:" + rid)])
     rows.append([InlineKeyboardButton(
-        "Предложить ещё компанию" if payload == "route_p" else "Новый подбор",
-        url=link(payload))])
+        "Предложить ещё компанию" if case["kind"] == "Предложение компании"
+        else "Новый подбор",
+        callback_data=("gf:start:offer" if case["kind"] == "Предложение компании"
+                       else "qg:start:search"))])
     return InlineKeyboardMarkup(rows)
 
 

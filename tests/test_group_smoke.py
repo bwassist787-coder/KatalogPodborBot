@@ -32,6 +32,7 @@ class FullGroupFlowTests(unittest.IsolatedAsyncioTestCase):
         self.bot = SimpleNamespace(
             send_message=AsyncMock(side_effect=send_message),
             get_chat=AsyncMock(return_value=SimpleNamespace(title="ТЕСТ Бот")),
+            get_chat_member=AsyncMock(return_value=SimpleNamespace(status="member")),
         )
         self.context = SimpleNamespace(bot=self.bot)
         self.offer = Offer(
@@ -76,33 +77,14 @@ class FullGroupFlowTests(unittest.IsolatedAsyncioTestCase):
     def flow(self, topic):
         return group_forms.read(-1003794002701, topic, 42)
 
-    async def test_search_stays_in_topic_and_reaches_manager_group(self):
-        with (patch.object(group_dialog, "read_offers", return_value=[self.offer]),
-              patch.object(group_dialog, "save_request", return_value="REQ-SMOKE01")):
-            await self.click("gf:start:search")
-            f = self.flow(3)
-            await self.click(f"gf:search_cat:{f['token']}:2", f["prompt_id"])
-            f = self.flow(3)
-            await self.click(f"gf:search_vat:{f['token']}:1", f["prompt_id"])
-            await self.reply("search_amount", "500000", 3)
-            f = self.flow(3)
-            self.assertEqual(f["stage"], "results")
-            await self.click(f"gf:choose:{f['token']}:0", f["prompt_id"])
-            await self.reply("search_comment", "-", 3)
-            f = self.flow(3)
-            self.assertEqual(f["stage"], "confirm")
-            await self.click(f"gf:submit:{f['token']}", f["prompt_id"])
-            self.assertIsNone(self.flow(3))
-        case = case_store.find("REQ-SMOKE01")
-        self.assertIsNotNone(case)
-        self.assertEqual(case["origin_topic_id"], 3)
-        self.assertTrue(case["origin_message_id"])
-        self.assertTrue(case["chat_message_id"])
-        self.assertEqual(case["kind"], "Заявка")
-        self.assertTrue(any(x.chat_id == -1003759930340 for x in self.sent))
-        self.assertTrue(all(x.chat_id in (-1003794002701, -1003759930340)
-                            for x in self.sent))
-        self.assertTrue(all(x.chat_id != 42 for x in self.sent))
+    async def test_legacy_search_button_opens_new_five_card_flow_in_group(self):
+        await self.click("gf:start:search")
+        f = self.flow(3)
+        self.assertEqual(f["stage"], "quick_category")
+        self.assertIn("qg:cat:", str(self.sent[-1].reply_markup.to_dict()))
+        self.assertEqual(self.sent[-1].message_thread_id, 3)
+        self.assertEqual(self.sent[-1].chat_id, -1003794002701)
+        self.assertFalse(any(x.chat_id == 42 for x in self.sent))
 
     async def test_customer_company_offer_stays_in_own_topic(self):
         with patch.object(group_dialog, "save_request",

@@ -164,9 +164,20 @@ async def callback(update, context):
     bits = code.split(":")
     user = q.from_user
     chat = q.message.chat.id
-
-    if len(bits) == 3 and bits[1] == "start" and bits[2] in ("search", "offer"):
-        await _start(q, context, bits[2])
+    if not await forum_route.member_allowed(context.bot, user.id):
+        await q.answer("Нет доступа к клиентской группе.", show_alert=True)
+        return
+    if code == "gf:start:search":
+        # An obsolete group menu must open the NEW five-card browser.
+        from group_quick_catalog import start as start_quick
+        await q.answer("Подбор откроется в теме «Предложения от Нас».")
+        await start_quick(q, context)
+        return
+    if code == "gf:start:offer":
+        await _start(q, context, "offer")
+        return
+    if bits[1] in ("search_cat", "search_vat", "page", "choose", "missing"):
+        await q.answer("Старый подбор отключён. Откройте новое меню.", show_alert=True)
         return
 
     if len(bits) == 3 and bits[1] in ("ask", "cancel"):
@@ -211,6 +222,9 @@ async def callback(update, context):
         return
     topic, data = form["topic_id"], form["data"]
     stage = form["stage"]
+    if action == "submit" and data.get("kind") != "offer":
+        await q.answer("Старый подбор отключён. Начните заново.", show_alert=True)
+        return
     if action == "stop":
         group_forms.complete(chat, topic, user.id, nonce)
         await q.answer("Отменено")

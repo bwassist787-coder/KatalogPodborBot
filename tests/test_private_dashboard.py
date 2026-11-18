@@ -77,48 +77,26 @@ class ClientPrivateDashboardTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(private_client.case_belongs_to_client(
             case_store.find("R3"), 42, -1003794002701))
 
-    async def test_full_freeform_request_stays_private_and_reaches_manager(self):
-        with (patch.object(bot_module, "MANAGER_CHAT_ID", "-1003759930340"),
-              patch.object(bot_module, "save_request", return_value="REQ-PRIVATE-1")):
-            await bot_module.callback(self.update(callback="menu:free"), self.context)
-            self.assertEqual(self.context.user_data["stage"], "free_text")
-            await bot_module.message(self.update(
-                text="Нужна строительная компания на 800000 с НДС, документы обсудим."),
-                self.context)
-            self.assertEqual(self.context.user_data["stage"], "confirm")
-            await bot_module.callback(self.update(callback="lead:send"), self.context)
-            self.assertNotIn("stage", self.context.user_data)
-        case = case_store.find("REQ-PRIVATE-1")
-        self.assertEqual(case["client_group_id"], -1003794002701)
-        self.assertIsNone(case["origin_chat_id"])
-        self.assertEqual(case["kind"], "Свободный запрос")
-        self.assertEqual(case["client_id"], 42)
-        self.assertTrue(case["chat_message_id"])
-        self.manager_send.assert_awaited_once()
-        self.assertEqual(self.manager_send.await_args.kwargs["chat_id"], -1003759930340)
-        self.assertNotIn("ИНН", case["client_summary"])
-        self.assertIn("строительная компания", case["client_summary"])
-        await bot_module.callback(self.update(callback="dash:list:active"), self.context)
-        args = self.reply.await_args.kwargs
-        self.assertIn("reply_markup", args)
-
-    async def test_private_dashboard_never_opens_other_clients_case(self):
-        case_store.register("R-FOREIGN", 43, -1003759930340, "Заявка", "secret",
-                            client_group_id=-1003794002701)
-        await bot_module.callback(
-            self.update(callback="dash:view:R-FOREIGN"), self.context)
-        self.assertIn("недоступна", self.reply.await_args.args[0])
-
-    async def test_legacy_group_button_never_activates_old_group_form(self):
-        query = SimpleNamespace(
-            data="gf:start:search", from_user=self.user,
-            message=SimpleNamespace(reply_text=AsyncMock()), answer=AsyncMock())
-        update = SimpleNamespace(
-            callback_query=query,
-            effective_chat=SimpleNamespace(id=-1003794002701))
-        await bot_module.legacy_group_button(update, self.context)
-        query.answer.assert_awaited_once()
+    async def test_private_start_cannot_create_case_or_show_catalog(self):
+        await bot_module.start(self.update(), self.context)
+        self.assertIn("только", self.reply.await_args.args[0])
+        self.manager_send.assert_not_awaited()
         self.assertEqual(case_store.client_cases(42, -1003794002701), [])
+
+    async def test_old_private_buttons_cannot_open_case_or_submit(self):
+        for data in ("browse:start", "menu:propose", "menu:free",
+                     "lead:send", "dash:list:active", "dash:view:R-FOREIGN"):
+            update = self.update(callback=data)
+            await bot_module.callback(update, self.context)
+            update.callback_query.answer.assert_awaited()
+        self.assertEqual(self.context.user_data, {})
+        self.manager_send.assert_not_awaited()
+
+    async def test_old_private_text_cannot_submit_request(self):
+        self.context.user_data.update(stage="lead_comment", selected_id="DEMO-001")
+        await bot_module.message(self.update(text="Компания на 500000"), self.context)
+        self.assertIn("только", self.reply.await_args.args[0])
+        self.assertEqual(self.context.user_data, {})
         self.manager_send.assert_not_awaited()
 
 
